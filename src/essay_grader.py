@@ -2,9 +2,11 @@
  
 import os
 import json
+import time
 from pathlib import Path
 from typing import List, Dict
  
+import httpx
 from dotenv import load_dotenv
 import anthropic
  
@@ -18,10 +20,37 @@ load_dotenv()
 # claude-3-haiku-20240307 in February 2026.
 DEFAULT_MODEL = "claude-haiku-4-5-20251001"
  
+# Output token cap. 4000 is enough for thorough "Do Not Interview" verdicts
+# with detailed rationale, weaknesses, and per-question assessments.
+MAX_TOKENS = 4000
+ 
+# Retry policy for transient connection errors.
+MAX_RETRIES = 4
+ 
 # The grading prompt lives at <project_root>/config/essay_prompt.txt.
 # This file is in <project_root>/src, so we go up one level then into config.
 BASE_DIR = Path(__file__).resolve().parent
 PROMPT_FILE = BASE_DIR.parent / "config" / "essay_prompt.txt"
+ 
+ 
+# Errors we treat as transient and worth retrying.
+#
+# We catch a deliberately wide net of httpx and anthropic exception types
+# because in streaming mode, network errors occurring mid-stream surface as
+# raw httpx exceptions rather than the wrapped anthropic ones.
+RETRYABLE_EXCEPTIONS = (
+    anthropic.APIConnectionError,
+    anthropic.APITimeoutError,
+    httpx.ConnectError,
+    httpx.ReadError,
+    httpx.WriteError,
+    httpx.RemoteProtocolError,
+    httpx.PoolTimeout,
+    httpx.ConnectTimeout,
+    httpx.ReadTimeout,
+    httpx.WriteTimeout,
+    ConnectionError,  # OS-level WinError 10054 sometimes surfaces this way
+)
  
  
 # ============================================================
@@ -39,8 +68,20 @@ def _load_grading_prompt() -> str:
  
  
 def _build_client() -> anthropic.Anthropic:
-    """Builds an Anthropic client. Raises a clear error if no key is set —
-    failing here is much better than failing inside the per-essay loop."""
+    """Builds an Anthropic client with a custom HTTP client tuned for
+    network paths that aggressively close idle/long connections.
+ 
+    Why a custom http_client
+    ------------------------
+    On Windows networks where corporate proxies, antivirus, or aggressive NAT
+    sweepers kill long-running TLS connections (WinError 10054), the SDK's
+    default httpx settings can struggle. We apply two defensive measures:
+ 
+      - Disable HTTP/2: connection multiplexing is a known soft spot;
+        HTTP/1.1 is more forgiving.
+      - Longer read timeout: a 4000-token grade can legitimately take
+        60+ seconds. Default httpx read timeout is 5s, far too short.
+    """
     api_key = os.getenv("ANTHROPIC_API_KEY")
     if not api_key:
         raise RuntimeError(
@@ -48,7 +89,18 @@ def _build_client() -> anthropic.Anthropic:
             "project root (or export it in your shell) before running the "
             "pipeline."
         )
-    return anthropic.Anthropic(api_key=api_key)
+ 
+    custom_http_client = httpx.Client(
+        http2=False,
+        timeout=httpx.Timeout(
+            connect=15.0,   # opening the TCP/TLS connection
+            read=180.0,     # reading bytes from a stream
+            write=30.0,     # uploading the request body
+            pool=10.0,      # waiting for a free connection from the pool
+        ),
+    )
+ 
+    return anthropic.Anthropic(api_key=api_key, http_client=custom_http_client)
  
  
 # ============================================================
@@ -66,39 +118,32 @@ def grade_essay(
  
     Fail-fast policy
     ----------------
-    Any API error or invalid JSON response raises and stops the run.
-    Empty essays (data condition, not system failure) return a normal
-    row flagged with classification='error'.
+    Authentication errors, rate-limit errors, and JSON-parse errors raise
+    immediately and stop the run. Connection errors are retried with
+    exponential backoff before giving up.
+ 
+    Empty essays (data condition, not system failure) return a normal row
+    flagged with classification='error'.
     """
     if not essay_text or not essay_text.strip():
         return _empty_essay_result(candidate_number, role)
  
-    response = client.messages.create(
+    raw_output = _call_claude_with_retry(
+        client=client,
         model=model,
-        max_tokens=1500,
-        temperature=0,
         system=grading_prompt,
-        messages=[
-            {
-                "role": "user",
-                "content": (
-                    f"Candidate number: {candidate_number}\n"
-                    f"Role: {role}\n\n"
-                    f"Essay:\n{essay_text}"
-                ),
-            }
-        ],
+        candidate_number=candidate_number,
+        role=role,
+        essay_text=essay_text,
     )
  
-    raw_output = response.content[0].text.strip()
-    cleaned = _strip_code_fences(raw_output)
- 
     try:
-        result = json.loads(cleaned)
-    except json.JSONDecodeError as exc:
+        json_text = _extract_first_json_object(raw_output)
+        result = json.loads(json_text)
+    except (ValueError, json.JSONDecodeError) as exc:
         raise ValueError(
-            f"Claude returned invalid JSON for candidate {candidate_number}.\n"
-            f"Raw response:\n{raw_output}"
+            f"Could not parse JSON from Claude's response for candidate "
+            f"{candidate_number}.\nReason: {exc}\nRaw response:\n{raw_output}"
         ) from exc
  
     return _normalise_result(result, candidate_number, role)
@@ -108,18 +153,7 @@ def grade_essay(
 # BATCH ENTRY POINT
 # ============================================================
 def grade_essays(essays: List[Dict], model: str = DEFAULT_MODEL) -> List[Dict]:
-    """Grades every essay in the list.
- 
-    Parameters
-    ----------
-    essays : list of dicts shaped like the output of pdf_loader.load_essays:
-             {"candidate_number", "role", "essay_text", "source_file"}
-    model  : Anthropic model string (default: current Haiku)
- 
-    Returns
-    -------
-    list of result dicts, one per input essay.
-    """
+    """Grades every essay in the list."""
     if not essays:
         raise ValueError("No essays provided to grade.")
  
@@ -145,12 +179,62 @@ def grade_essays(essays: List[Dict], model: str = DEFAULT_MODEL) -> List[Dict]:
             model=model,
         )
  
-        # Carry the source filename through so the report can reference it
-        # if anything looks off.
         result["source_file"] = essay.get("source_file", "")
         results.append(result)
  
     return results
+ 
+ 
+# ============================================================
+# NETWORK CALL WITH RETRY
+# ============================================================
+def _call_claude_with_retry(
+    client: anthropic.Anthropic,
+    model: str,
+    system: str,
+    candidate_number: str,
+    role: str,
+    essay_text: str,
+    max_retries: int = MAX_RETRIES,
+) -> str:
+    """Calls Claude using streaming mode and retries on transient errors."""
+    last_exc: Exception | None = None
+ 
+    for attempt in range(1, max_retries + 1):
+        try:
+            with client.messages.stream(
+                model=model,
+                max_tokens=MAX_TOKENS,
+                temperature=0,
+                system=system,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": (
+                            f"Candidate number: {candidate_number}\n"
+                            f"Role: {role}\n\n"
+                            f"Essay:\n{essay_text}"
+                        ),
+                    }
+                ],
+            ) as stream:
+                return "".join(stream.text_stream).strip()
+ 
+        except RETRYABLE_EXCEPTIONS as exc:
+            last_exc = exc
+            if attempt < max_retries:
+                wait = 2 ** attempt  # 2s, 4s, 8s, 16s
+                err_type = type(exc).__name__
+                print(
+                    f"     ⚠ {err_type} (attempt {attempt}/{max_retries}); "
+                    f"retrying in {wait}s..."
+                )
+                time.sleep(wait)
+            else:
+                raise
+ 
+    assert last_exc is not None
+    raise last_exc
  
  
 # ============================================================
@@ -195,30 +279,71 @@ def _normalise_result(result: Dict, candidate_number: str, role: str) -> Dict:
     }
  
  
-def _strip_code_fences(text: str) -> str:
-    """Removes leading/trailing markdown code fences if present.
+def _extract_first_json_object(text: str) -> str:
+    """Finds and returns the first balanced JSON object in text.
  
-    Claude often wraps JSON in ```json ... ``` even when instructed otherwise.
-    This is a known quirk; rather than fight it via prompting alone, strip
-    fences defensively before parsing. Handles all common variants:
+    Why this exists
+    ---------------
+    Claude sometimes wraps its JSON in markdown code fences. Sometimes it
+    adds a preamble before the JSON. Sometimes — for borderline assessments —
+    it returns one JSON object, second-guesses itself, then returns a
+    *second* JSON object with a corrected verdict, with markdown narration
+    between them. A simple ``json.loads`` of the whole response fails on
+    any of these variations.
  
-        ```json\\n{...}\\n```
-        ```\\n{...}\\n```
-        {...}                    (no fences — passed through unchanged)
+    This function locates the first '{' in the response, then tracks brace
+    depth (correctly handling braces inside string literals) until it finds
+    the matching '}'. The resulting substring is guaranteed to be a single
+    balanced JSON object — though not necessarily *valid* JSON; the caller
+    still parses it, which catches malformed content.
+ 
+    When Claude returns multiple JSON objects, we deliberately take the
+    first one rather than the last. The first is the model's primary
+    answer; subsequent ones are revisions, but those revisions also
+    sometimes contradict the prompt's required schema. Taking the first
+    is more predictable.
+ 
+    Raises
+    ------
+    ValueError if no '{' is found, or if the first '{' has no matching '}'.
     """
-    text = text.strip()
+    start = text.find("{")
+    if start == -1:
+        raise ValueError("No JSON object found in response (no '{' character)")
  
-    if not text.startswith("```"):
-        return text
+    depth = 0
+    in_string = False
+    escape_next = False
  
-    lines = text.split("\n")
+    for i in range(start, len(text)):
+        ch = text[i]
  
-    # Drop the opening fence line (e.g. "```json" or just "```")
-    lines = lines[1:]
+        # Handle escape sequences inside strings
+        if escape_next:
+            escape_next = False
+            continue
+        if ch == "\\" and in_string:
+            escape_next = True
+            continue
  
-    # Drop the closing fence line if present
-    if lines and lines[-1].strip().startswith("```"):
-        lines = lines[:-1]
+        # Track whether we're inside a string literal
+        if ch == '"':
+            in_string = not in_string
+            continue
  
-    return "\n".join(lines).strip()
+        # Braces inside strings don't count toward depth
+        if in_string:
+            continue
+ 
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start : i + 1]
+ 
+    raise ValueError(
+        f"Unterminated JSON object starting at position {start}; "
+        f"response may have been truncated."
+    )
  
