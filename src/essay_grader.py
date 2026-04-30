@@ -1,29 +1,29 @@
 """Sends each essay to Claude for grading and returns structured results."""
-
+ 
 import os
 import json
 from pathlib import Path
 from typing import List, Dict
-
+ 
 from dotenv import load_dotenv
 import anthropic
  
-
+ 
 # ============================================================
 # CONFIG
 # ============================================================
 load_dotenv()
-
+ 
 # Current production Haiku model (April 2026). Anthropic retired
 # claude-3-haiku-20240307 in February 2026.
 DEFAULT_MODEL = "claude-haiku-4-5-20251001"
-
+ 
 # The grading prompt lives at <project_root>/config/essay_prompt.txt.
 # This file is in <project_root>/src, so we go up one level then into config.
 BASE_DIR = Path(__file__).resolve().parent
 PROMPT_FILE = BASE_DIR.parent / "config" / "essay_prompt.txt"
-
-
+ 
+ 
 # ============================================================
 # LAZY INITIALISATION
 # ============================================================
@@ -36,8 +36,8 @@ def _load_grading_prompt() -> str:
             f"Expected at <project_root>/config/essay_prompt.txt"
         )
     return PROMPT_FILE.read_text(encoding="utf-8")
-
-
+ 
+ 
 def _build_client() -> anthropic.Anthropic:
     """Builds an Anthropic client. Raises a clear error if no key is set —
     failing here is much better than failing inside the per-essay loop."""
@@ -49,8 +49,8 @@ def _build_client() -> anthropic.Anthropic:
             "pipeline."
         )
     return anthropic.Anthropic(api_key=api_key)
-
-
+ 
+ 
 # ============================================================
 # PER-ESSAY GRADING
 # ============================================================
@@ -72,7 +72,7 @@ def grade_essay(
     """
     if not essay_text or not essay_text.strip():
         return _empty_essay_result(candidate_number, role)
-
+ 
     response = client.messages.create(
         model=model,
         max_tokens=1500,
@@ -89,20 +89,21 @@ def grade_essay(
             }
         ],
     )
-
+ 
     raw_output = response.content[0].text.strip()
-
+    cleaned = _strip_code_fences(raw_output)
+ 
     try:
-        result = json.loads(raw_output)
+        result = json.loads(cleaned)
     except json.JSONDecodeError as exc:
         raise ValueError(
             f"Claude returned invalid JSON for candidate {candidate_number}.\n"
             f"Raw response:\n{raw_output}"
         ) from exc
-
+ 
     return _normalise_result(result, candidate_number, role)
-
-
+ 
+ 
 # ============================================================
 # BATCH ENTRY POINT
 # ============================================================
@@ -121,20 +122,20 @@ def grade_essays(essays: List[Dict], model: str = DEFAULT_MODEL) -> List[Dict]:
     """
     if not essays:
         raise ValueError("No essays provided to grade.")
-
+ 
     client = _build_client()
     grading_prompt = _load_grading_prompt()
-
+ 
     results: List[Dict] = []
     total = len(essays)
-
+ 
     for idx, essay in enumerate(essays, start=1):
         candidate_number = essay["candidate_number"]
         role = essay["role"]
         essay_text = essay["essay_text"]
-
+ 
         print(f"  → Grading {idx}/{total} (candidate {candidate_number}, role {role})")
-
+ 
         result = grade_essay(
             essay_text=essay_text,
             candidate_number=candidate_number,
@@ -143,15 +144,15 @@ def grade_essays(essays: List[Dict], model: str = DEFAULT_MODEL) -> List[Dict]:
             grading_prompt=grading_prompt,
             model=model,
         )
-
+ 
         # Carry the source filename through so the report can reference it
         # if anything looks off.
         result["source_file"] = essay.get("source_file", "")
         results.append(result)
-
+ 
     return results
-
-
+ 
+ 
 # ============================================================
 # RESULT SHAPING
 # ============================================================
@@ -170,8 +171,8 @@ def _empty_essay_result(candidate_number: str, role: str) -> Dict:
         "ai_usage_indicators": "",
         "question_assessments": [],
     }
-
-
+ 
+ 
 def _normalise_result(result: Dict, candidate_number: str, role: str) -> Dict:
     """Ensures every expected key is present in the result dict.
  
@@ -192,3 +193,32 @@ def _normalise_result(result: Dict, candidate_number: str, role: str) -> Dict:
         "ai_usage_indicators": result.get("ai_usage_indicators", ""),
         "question_assessments": result.get("question_assessments", []),
     }
+ 
+ 
+def _strip_code_fences(text: str) -> str:
+    """Removes leading/trailing markdown code fences if present.
+ 
+    Claude often wraps JSON in ```json ... ``` even when instructed otherwise.
+    This is a known quirk; rather than fight it via prompting alone, strip
+    fences defensively before parsing. Handles all common variants:
+ 
+        ```json\\n{...}\\n```
+        ```\\n{...}\\n```
+        {...}                    (no fences — passed through unchanged)
+    """
+    text = text.strip()
+ 
+    if not text.startswith("```"):
+        return text
+ 
+    lines = text.split("\n")
+ 
+    # Drop the opening fence line (e.g. "```json" or just "```")
+    lines = lines[1:]
+ 
+    # Drop the closing fence line if present
+    if lines and lines[-1].strip().startswith("```"):
+        lines = lines[:-1]
+ 
+    return "\n".join(lines).strip()
+ 
