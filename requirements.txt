@@ -1,0 +1,11 @@
+# Anthropic SDK — sends essays to Claude for grading.
+anthropic==0.97.0
+ 
+# Loads ANTHROPIC_API_KEY (and any future env vars) from .env at runtime.
+python-dotenv==1.2.2
+ 
+# Writes the .xlsx grading report.
+openpyxl==3.1.5
+ 
+# Extracts text from candidate-submitted PDF essays.
+pdfplumber==0.11.9
