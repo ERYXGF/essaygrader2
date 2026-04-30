@@ -21,7 +21,7 @@ def run_pipeline() -> None:
     output_dir = base_dir / "output"
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    report_file = output_dir / "final_report.xlsx"
+    report_file = output_dir / "ai_essay_grading_report.xlsx"
 
     print("🚀 Pipeline starting...")
 
