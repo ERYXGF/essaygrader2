@@ -22,7 +22,7 @@ import pdfplumber
 # ============================================================
 # The expected filename suffix. Centralised here so a future rename
 # (e.g. to "assessment" with the correct spelling) is a one-line change.
-FILENAME_SUFFIX = "_assesment.pdf"
+FILENAME_SUFFIX = "_assignment.pdf"
  
 # Roles accepted in filenames. Must match what the grading prompt expects.
 VALID_ROLES = {"LTC", "TFO", "TRI"}
