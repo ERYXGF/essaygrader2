@@ -1,0 +1,18 @@
+FOLDER EXECUTION TEMPORARY SETUP STEPS:
+
+The following are the setup steps in which the project can be executed until we learn the 
+github process:
+
+1) Open Github and go to my repository called essaygrader2
+2) Click on the big green button called "code" and copy the link
+3) Open VS Code
+4) Click on "clone git repo"
+5) Open the VS Code terminal
+6) Create the virtual environment: python -m venv venv. If that doesn't work, run: sudo python -m venv venv.
+7) Activate the virtual environment: venv/Scripts/Activate. if that doesnt't work, run: sudo venv/Scripts/Activate
+8) Install dependencies: pip install -r requirements.txt
+9) Verify you have inputted the wanted essays AS PDF FILES in input/essays/
+10) Run the main code (execution of the project) in the terminal: python src/main.py
+11) To view the output, open your files locally in your computer, navigate to the "ouput"
+directory in the essaygrader2 folder and open the excel file.
+
