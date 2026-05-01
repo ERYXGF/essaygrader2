@@ -15,4 +15,4 @@ github process:
 10) Run the main code (execution of the project) in the terminal: python src/main.py
 11) To view the output, open your files locally in your computer, navigate to the "ouput"
 directory in the essaygrader2 folder and open the excel file.
-
+ 
