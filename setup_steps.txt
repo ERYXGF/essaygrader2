@@ -6,14 +6,15 @@ github process:
 1) Open Github and go to my repository called essaygrader2
 2) Click on the big green button called "code" and copy the link
 3) Open VS Code
-4) Click on "clone git repo"
+4) Click on "clone git repo" and paste the link from the github
 5) Open the VS Code terminal
-6) Create an API key in the Claude Console (searh on google)
-7) Create a file called .env and copy-paste EXACTLY : ANTHROPIC_API_KEY=(place your api key here)
-6) Create the virtual environment: python -m venv venv. If that doesn't work, run: sudo python -m venv venv.
-7) Activate the virtual environment: venv/Scripts/Activate. if that doesnt't work, run: sudo venv/Scripts/Activate
-8) Install dependencies: pip install -r requirements.txt
-9) Verify you have inputted the wanted essays AS PDF FILES in input/essays/
-10) Run the main code (execution of the project) in the terminal: python src/main.py
-11) To view the output, open your files locally in your computer, navigate to the "ouput"
+6) Create an API key in the Claude Console (search on google) and copy it
+7) Create a file called .env and copy-paste EXACTLY : ANTHROPIC_API_KEY=(paste your api key here)
+6) Create the virtual environment in the terminal: python -m venv venv. If that doesn't work, run: sudo python -m venv venv.
+7) Activate the virtual environment in the terminal: source venv/bin/activate (on mac) or venv/Scripts/activate (on windows/linux)
+8) Install dependencies in the terminal: pip install -r requirements.txt
+9) Create a folder in the root directory (not inside another folder) called input
+10) Create another folder called essays in the input folder and place all the students essays as PDF FILES.
+11) Run the main code (execution of the project) in the terminal: python src/main.py
+12) To view the output, open your files locally in your computer, navigate to the "ouput"
 directory in the essaygrader2 folder and open the excel file.
