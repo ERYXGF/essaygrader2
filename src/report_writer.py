@@ -1,21 +1,34 @@
 """Writes the Excel grading report.
  
-The report has two sheets:
-- Summary  : one row per candidate, headline grades, colour-coded classification,
-             plus three feedback columns (Human Override / Override Reason /
-             Reviewed) ready for the eventual RAG phase.
-- Detailed : strengths, weaknesses, rationale, AI indicators, Q1 summary.
+The report has up to three sheets:
+- Summary    : one row per candidate, headline grades, colour-coded classification,
+               three feedback columns (Human Override / Override Reason /
+               Reviewed) ready for the eventual RAG phase, and a Plagiarism Flag
+               column (colour-coded, empty when clean).
+- Detailed   : strengths, weaknesses, rationale, AI indicators, Q1 summary.
+- Similarity : one row per flagged essay pair with the full plagiarism evidence
+               (only written when similarity_pairs is provided).
 """
 
 from pathlib import Path
-from typing import List, Dict
+from typing import List, Dict, Optional
 
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment
 
 
-def write_report(results: List[Dict], output_path: str) -> None:
-    """Writes the grading results to an .xlsx file at output_path."""
+def write_report(
+    results: List[Dict],
+    output_path: str,
+    similarity_pairs: Optional[List[Dict]] = None,
+) -> None:
+    """Writes the grading results to an .xlsx file at output_path.
+
+    similarity_pairs is the output of plagiarism_checker.check_plagiarism().
+    Pass None (the default) to skip the Similarity sheet entirely — existing
+    callers are unaffected. An empty list writes the sheet with a
+    "no pairs flagged" row, so a clean run is distinguishable from no run.
+    """
     if not results:
         raise ValueError("No results provided to write report")
 
@@ -55,6 +68,7 @@ def write_report(results: List[Dict], output_path: str) -> None:
         "Human Override",
         "Override Reason",
         "Reviewed",
+        "Plagiarism Flag",
     ]
 
     for col, h in enumerate(summary_headers, 1):
@@ -78,11 +92,22 @@ def write_report(results: List[Dict], output_path: str) -> None:
             "",  # Human Override (blank — reviewer fills in)
             "",  # Override Reason
             "",  # Reviewed
+            r.get("plagiarism_flag", ""),
         ]
 
         for col, val in enumerate(values, 1):
             cell = ws1.cell(row=row_idx, column=col, value=val)
             cell.alignment = center
+
+        # Plagiarism flag: wrap (can hold one line per matched pair) and
+        # colour-band by risk so flagged rows stand out at a glance.
+        flag_cell = ws1.cell(row=row_idx, column=len(summary_headers))
+        flag_cell.alignment = Alignment(vertical="center", wrap_text=True)
+        flag_value = str(flag_cell.value or "")
+        if "⚠ HIGH" in flag_value:
+            flag_cell.fill = red
+        elif "⚠ MEDIUM" in flag_value:
+            flag_cell.fill = yellow
 
         # Classification colour band
         class_cell = ws1.cell(row=row_idx, column=3)
@@ -136,10 +161,80 @@ def write_report(results: List[Dict], output_path: str) -> None:
 
     _autosize(ws2, max_width=60)
 
+    # ============================================================
+    # SHEET 3 — SIMILARITY (one row per flagged essay pair)
+    # ============================================================
+    if similarity_pairs is not None:
+        _write_similarity_sheet(wb, similarity_pairs, header_font, red, yellow)
+
     # =========================
     # SAVE
     # =========================
     wb.save(output_file)
+
+
+def _write_similarity_sheet(
+    wb: Workbook,
+    pairs: List[Dict],
+    header_font: Font,
+    red: PatternFill,
+    yellow: PatternFill,
+) -> None:
+    """Writes the per-pair plagiarism evidence sheet.
+
+    Pairs come pre-ordered from plagiarism_checker (lower candidate number
+    first); each row carries the two lexical/semantic screen scores, the
+    risk band, and Claude's verdict with quoted evidence.
+    """
+    ws = wb.create_sheet(title="Similarity")
+
+    headers = [
+        "Candidate A",
+        "Candidate B",
+        "Lexical %",
+        "Semantic %",
+        "Risk",
+        "Claude Verdict",
+        "Shared Evidence",
+        "Explanation",
+    ]
+    for col, h in enumerate(headers, 1):
+        cell = ws.cell(row=1, column=col, value=h)
+        cell.font = header_font
+
+    if not pairs:
+        ws.cell(row=2, column=1, value="No pairs flagged — all essays below similarity thresholds.")
+        _autosize(ws, max_width=60)
+        return
+
+    # Highest risk first so reviewers see the worst pairs at the top.
+    risk_order = {"High": 0, "Medium": 1, "Low": 2}
+    sorted_pairs = sorted(pairs, key=lambda p: risk_order.get(p.get("risk", ""), 3))
+
+    for row_idx, p in enumerate(sorted_pairs, start=2):
+        evidence = p.get("shared_evidence", []) or []
+        values = [
+            p.get("candidate_a", ""),
+            p.get("candidate_b", ""),
+            p.get("lexical_pct", ""),
+            p.get("semantic_pct", ""),
+            p.get("risk", ""),
+            p.get("claude_verdict", ""),
+            "\n".join(f"• {e}" for e in evidence),
+            p.get("claude_explanation", ""),
+        ]
+        for col, val in enumerate(values, 1):
+            cell = ws.cell(row=row_idx, column=col, value=val)
+            if col >= 7:  # evidence + explanation are long-form text
+                cell.alignment = Alignment(vertical="top", wrap_text=True)
+
+        risk_cell = ws.cell(row=row_idx, column=5)
+        if p.get("risk") == "High":
+            risk_cell.fill = red
+        elif p.get("risk") == "Medium":
+            risk_cell.fill = yellow
+
+    _autosize(ws, max_width=60)
 
 
 def _autosize(ws, max_width: int = 40) -> None:

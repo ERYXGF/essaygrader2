@@ -1,12 +1,13 @@
 """Main pipeline controller.
- 
-Flow:  PDFs in input/essays/  →  Claude grading  →  Excel report
+
+Flow:  PDFs in input/essays/  →  Claude grading  →  plagiarism screen  →  Excel report
 """
 
 from pathlib import Path
 
 from pdf_loader import load_essays
 from essay_grader import grade_essays
+from plagiarism_checker import check_plagiarism, apply_plagiarism_overrides
 from report_writer import write_report
 
 
@@ -42,10 +43,24 @@ def run_pipeline() -> None:
         raise ValueError("No results returned from Claude grading step")
 
     # ============================================================
-    # STEP 3 — REPORT GENERATION
+    # STEP 3 — PLAGIARISM SCREEN
+    # ============================================================
+    # Cheap lexical screen over every pair; only flagged pairs go to Claude.
+    # High-risk matches downgrade 'Priority Interview' to 'Maybe'.
+    print("🔍 Screening essay pairs for plagiarism...")
+    similarity_pairs = check_plagiarism(essays)
+    apply_plagiarism_overrides(results, similarity_pairs)
+    print(f"   ✓ {len(similarity_pairs)} pair(s) flagged for review")
+
+    # ============================================================
+    # STEP 4 — REPORT GENERATION
     # ============================================================
     print("📝 Writing Excel report...")
-    write_report(results=results, output_path=str(report_file))
+    write_report(
+        results=results,
+        output_path=str(report_file),
+        similarity_pairs=similarity_pairs,
+    )
 
     # ============================================================
     # DONE
