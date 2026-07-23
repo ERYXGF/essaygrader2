@@ -22,3 +22,5 @@ output/
 # input/
 input/
 
+.DS_Store
+**/.DS_Store
