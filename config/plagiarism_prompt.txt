@@ -35,3 +35,10 @@ Respond only in JSON. Do not include any preamble, explanation or markdown forma
 
 - "explanation": 2-4 sentences stating why you reached the verdict, citing the strongest evidence.
 - "shared_evidence": up to 5 short quoted passages or specific shared elements (quote from the essays; keep each under 30 words). Empty list if verdict is likely_coincidence.
+
+## JSON string rules (critical)
+
+The output must be strictly valid JSON that passes a JSON parser:
+- Never put an unescaped double-quote character (") inside a string value.
+- When quoting passages from the essays, wrap them in single quotes (') instead of double quotes — e.g. "shared_evidence": ["'set a relaxed atmosphere'", "both chose SAW and WLM"].
+- No trailing commas, no comments, no text outside the JSON object.

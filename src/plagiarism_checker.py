@@ -62,6 +62,11 @@ _VERDICT_RISK = {
 # Output cap for the pair-review call — the verdict JSON is short.
 PAIR_REVIEW_MAX_TOKENS = 1500
 
+# How many corrective re-asks we allow when Claude returns invalid JSON.
+# Plain retries are pointless at temperature 0 (same input → same output),
+# so each re-ask feeds the invalid output and parse error back to Claude.
+PARSE_FIX_ATTEMPTS = 2
+
 # The pair-review prompt lives next to the grading prompt in config/.
 BASE_DIR = Path(__file__).resolve().parent
 PROMPT_FILE = BASE_DIR.parent / "config" / "plagiarism_prompt.txt"
@@ -309,21 +314,94 @@ def _claude_pair_verdict(
 ) -> Dict:
     """Asks Claude for a plagiarism verdict on one pair of essays.
 
-    Same fail-fast policy as grading: transient connection errors are retried
-    with exponential backoff; auth/rate-limit/parse errors raise immediately.
+    Transient connection errors are retried with exponential backoff.
+    Invalid JSON gets corrective re-asks (the invalid output and parse error
+    are fed back to Claude); if that still fails, the pair falls back to a
+    'suspicious — manual review required' verdict rather than aborting a run
+    whose grading cost has already been spent.
     """
-    user_content = (
-        f"=== Submission from candidate {essay_a['candidate_number']} "
-        f"(role: {essay_a['role']}) ===\n"
-        f"{essay_a['essay_text']}\n\n"
-        f"=== Submission from candidate {essay_b['candidate_number']} "
-        f"(role: {essay_b['role']}) ===\n"
-        f"{essay_b['essay_text']}"
+    pair_label = f"{essay_a['candidate_number']} <-> {essay_b['candidate_number']}"
+    messages = [{
+        "role": "user",
+        "content": (
+            f"=== Submission from candidate {essay_a['candidate_number']} "
+            f"(role: {essay_a['role']}) ===\n"
+            f"{essay_a['essay_text']}\n\n"
+            f"=== Submission from candidate {essay_b['candidate_number']} "
+            f"(role: {essay_b['role']}) ===\n"
+            f"{essay_b['essay_text']}"
+        ),
+    }]
+
+    last_parse_error = ""
+    for parse_attempt in range(1 + PARSE_FIX_ATTEMPTS):
+        raw_output = _stream_with_retry(
+            client=client,
+            model=model,
+            system=system,
+            messages=messages,
+            pair_label=pair_label,
+            max_retries=max_retries,
+        )
+
+        try:
+            verdict = json.loads(_extract_first_json_object(raw_output))
+        except (ValueError, json.JSONDecodeError) as exc:
+            last_parse_error = str(exc)
+            if parse_attempt < PARSE_FIX_ATTEMPTS:
+                print(
+                    f"     ! Invalid JSON verdict for pair {pair_label} "
+                    f"({exc}); asking Claude to correct it..."
+                )
+                messages = messages + [
+                    {"role": "assistant", "content": raw_output},
+                    {
+                        "role": "user",
+                        "content": (
+                            f"Your previous response was not valid JSON "
+                            f"(parser error: {exc}). Re-send the same verdict "
+                            f"as strictly valid JSON. Never put an unescaped "
+                            f"double-quote character inside a string value; "
+                            f"use single quotes for any phrases quoted from "
+                            f"the essays. Output only the JSON object."
+                        ),
+                    },
+                ]
+            continue
+
+        return {
+            "verdict": verdict.get("verdict", "suspicious"),
+            "explanation": verdict.get("explanation", ""),
+            "shared_evidence": verdict.get("shared_evidence", []) or [],
+        }
+
+    # All attempts produced unparseable output. Flag for a human instead of
+    # killing the pipeline; the lexical/semantic scores are still reported.
+    print(
+        f"     ! Could not obtain a valid JSON verdict for pair {pair_label} "
+        f"after {1 + PARSE_FIX_ATTEMPTS} attempts; flagging for manual review."
     )
+    return {
+        "verdict": "suspicious",
+        "explanation": (
+            f"Automated verdict could not be parsed after "
+            f"{1 + PARSE_FIX_ATTEMPTS} attempts (last error: "
+            f"{last_parse_error}) — manual review required. "
+            f"Similarity scores are unaffected."
+        ),
+        "shared_evidence": [],
+    }
 
-    last_exc: Exception | None = None
-    raw_output = ""
 
+def _stream_with_retry(
+    client: anthropic.Anthropic,
+    model: str,
+    system: str,
+    messages: List[Dict],
+    pair_label: str,
+    max_retries: int,
+) -> str:
+    """Streams one completion, retrying transient connection errors."""
     for attempt in range(1, max_retries + 1):
         try:
             with client.messages.stream(
@@ -331,12 +409,19 @@ def _claude_pair_verdict(
                 max_tokens=PAIR_REVIEW_MAX_TOKENS,
                 temperature=0,
                 system=system,
-                messages=[{"role": "user", "content": user_content}],
+                messages=messages,
             ) as stream:
                 raw_output = "".join(stream.text_stream).strip()
-            break
+                stop_reason = stream.get_final_message().stop_reason
+            if stop_reason == "max_tokens":
+                raise ValueError(
+                    f"Plagiarism verdict for pair {pair_label} hit the "
+                    f"{PAIR_REVIEW_MAX_TOKENS}-token output limit and was cut "
+                    f"off. Increase PAIR_REVIEW_MAX_TOKENS in "
+                    f"plagiarism_checker.py."
+                )
+            return raw_output
         except RETRYABLE_EXCEPTIONS as exc:
-            last_exc = exc
             if attempt < max_retries:
                 wait = 2 ** attempt
                 print(
@@ -346,24 +431,7 @@ def _claude_pair_verdict(
                 time.sleep(wait)
             else:
                 raise
-    else:
-        assert last_exc is not None
-        raise last_exc
-
-    try:
-        verdict = json.loads(_extract_first_json_object(raw_output))
-    except (ValueError, json.JSONDecodeError) as exc:
-        raise ValueError(
-            f"Could not parse JSON from Claude's plagiarism verdict for pair "
-            f"{essay_a['candidate_number']} ↔ {essay_b['candidate_number']}.\n"
-            f"Reason: {exc}\nRaw response:\n{raw_output}"
-        ) from exc
-
-    return {
-        "verdict": verdict.get("verdict", "suspicious"),
-        "explanation": verdict.get("explanation", ""),
-        "shared_evidence": verdict.get("shared_evidence", []) or [],
-    }
+    raise AssertionError("unreachable")
 
 
 # ============================================================

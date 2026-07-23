@@ -353,6 +353,7 @@ def _extract_first_json_object(text: str) -> str:
  
     raise ValueError(
         f"Unterminated JSON object starting at position {start}; "
-        f"response may have been truncated."
+        f"response may have been truncated or contain unescaped "
+        f"quote characters."
     )
  
