@@ -20,9 +20,10 @@ load_dotenv()
 # claude-3-haiku-20240307 in February 2026.
 DEFAULT_MODEL = "claude-haiku-4-5-20251001"
  
-# Output token cap. 4000 is enough for thorough "Do Not Interview" verdicts
-# with detailed rationale, weaknesses, and per-question assessments.
-MAX_TOKENS = 4000
+# Output token cap. Thorough verdicts with per-question assessments
+# (prompt v9.0) can exceed 4000 tokens for strong candidates, so this
+# needs generous headroom. Truncation is detected and reported explicitly.
+MAX_TOKENS = 8000
  
 # Retry policy for transient connection errors.
 MAX_RETRIES = 4
@@ -218,7 +219,15 @@ def _call_claude_with_retry(
                     }
                 ],
             ) as stream:
-                return "".join(stream.text_stream).strip()
+                text = "".join(stream.text_stream).strip()
+                stop_reason = stream.get_final_message().stop_reason
+                if stop_reason == "max_tokens":
+                    raise ValueError(
+                        f"Response for candidate {candidate_number} hit the "
+                        f"{MAX_TOKENS}-token output limit and was cut off. "
+                        f"Increase MAX_TOKENS in essay_grader.py."
+                    )
+                return text
  
         except RETRYABLE_EXCEPTIONS as exc:
             last_exc = exc

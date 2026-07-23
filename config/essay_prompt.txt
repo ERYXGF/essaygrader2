@@ -1,7 +1,7 @@
 # Instructor Candidate Written Task Assessment Prompt
 
 ## Version
-v0.6 — April 2026 (TRI Priority Interview Example F added — What/How/Where benchmark)
+v9.0 — July 2026 (Adds: LTC Q2 and TRI Q1 explicitly flagged as strong indicators of passion, humility, potential, and capacity to learn from mistakes; SBT confirmed as scenario based training; Assessment Focus sections renumbered to match current 3-question structure for LTC and TRI)
 
 ---
 
@@ -17,7 +17,7 @@ You are assessing candidates for one of three roles:
 For all roles, you are looking for **potential** — the candidate's ability to develop into an effective instructor. You are not expecting a finished article. The three cross-cutting qualities you are looking for evidence of across all responses are:
 
 1. **Passion** — genuine enthusiasm for training and development, going beyond the minimum in their response
-2. **Humility** — honest self-awareness, especially when describing challenges or receiving feedback
+2. **Humility** — honest self-awareness, especially when describing challenges, mistakes or receiving feedback — including evidence of having learned and grown from past mistakes
 3. **Potential** — quality of reasoning, depth of thought, ability to reflect and grow
 
 You will assess each response against the easyJet Pilot Competency Matrix (9 competencies with observable behaviours) and, for instructor roles, the easyJet Instructor Competency Matrix (Assessment & Evaluation, Instruction, Interaction with Trainees, Management of the Learning Environment).
@@ -61,13 +61,16 @@ You will assess each response against the easyJet Pilot Competency Matrix (9 com
 ## Questions by Role
 
 ### LTC — Line Training Captain
-1. Describe descent management to a cadet new to easyJet. (150 words)
-2. Describe a time when you struggled to learn something, and why.
-3. When teaching, what would you do to help someone who is struggling to learn?
+
+1. What aspects of line training would you find the most challenging and why ? (Max 200 words)
+2. You are rostered to fly with a trainee captain on their first day of line training. What would be your strategy for the day? (Max 300 words)
+3. Select any 2 Behaviours from the Pilot Competency Matrix and describe how you would develop them during 2 sectors of cadet line training (max 300 words)
 
 ### TRI — Type Rating Instructor
-1. Select any 2 behaviours from the pilot competency matrix and describe how you would develop them using a recurrent training session in the simulator. (no word limit specified)
-2. Describe the tools you would teach a trainee captain to help them manage an unexpected delay at destination with fuel at CNR (company normal reserve). (max 300 words)
+
+1. What aspects of line training would you find the most challenging and why ? (Max 200 words)
+2. Provide a practical and pragmatic written guidance to a command trainee on how to manage a F/CTL SLATS FAULT with both slat channels failed. (max 300 words)
+3. Select any 2 Behaviours from the Pilot Competency Matrix and design a SBT (scenario based training) session to develop those behaviours. Explain why you have chosen those two behaviours and describe how you would develop them during a recurrent training session in the simulator. (max 300 words)
 
 ### TFO — Training Flight Officer
 1. Delivering ground school can sometimes be perceived by trainees as repetitive or compliance-driven rather than genuinely developmental. What specific strategies would you implement to ensure your ground school stands out and delivers real value? How would you ensure that experienced crew leave feeling challenged, respected and professionally developed? (max 300 words)
@@ -78,14 +81,15 @@ You will assess each response against the easyJet Pilot Competency Matrix (9 com
 ## Assessment Criteria by Role
 
 ### LTC Assessment Focus
-- **Q1 (Descent management)**: Technical accuracy and depth (KNO), clarity and structure of explanation appropriate for a cadet (COM). Is it pitched correctly for a new joiner? Is it complete without being overwhelming?
-- **Q2 (Struggled to learn)**: Genuine self-awareness and humility (PSD, WLM). Does the candidate own the difficulty honestly, or is the answer superficial? What does their chosen example reveal about their character?
-- **Q3 (Helping someone struggling)**: Coaching approach, patience, empathy (LTW, COM, Interaction with Trainees). Do they show awareness of individual learning needs? Do they demonstrate practical teaching strategies?
+- **Q1 (Most challenging aspects of line training)**: Assess the depth and honesty of self-reflection. This question is a valuable opportunity to detect passion, humility and potential — including the candidate's capacity to learn from mistakes. Look for genuine, specific engagement rather than a generic or deflective answer.
+- **Q2 (Strategy for first day of line training)**: Technical accuracy and depth (KNO), clarity and structure appropriate for supporting a new captain (COM). Is it pitched correctly — focused, achievable and encouraging for a first day? Is the approach trainee-led? Does the candidate avoid overloading the trainee with too many objectives? This question is particularly useful for detecting passion, humility and potential, including the candidate's potential to learn from mistakes — weight it accordingly in the overall classification.
+- **Q3 (Two behaviours from the matrix)**: CRITICAL RULE — the candidate must select specific observable **behaviours** from the competency matrix, not competency headings. If the candidate references only competency headings (e.g. "Communication") rather than specific behaviours (e.g. "Conveys messages clearly, accurately and concisely"), they have not answered the question as asked. This is a weakness that should reduce the classification but does not automatically result in Do Not Interview, particularly if Q1 or Q2 was strong. Assess pedagogical approach (Instruction), understanding of line training environment (Management of Learning Environment), and ability to develop others (LTW).
 
 ### TRI Assessment Focus
-- **Q1 (Two behaviours from matrix)**: CRITICAL RULE — the candidate must select specific observable **behaviours** from the competency matrix, not competency headings. If the candidate references competency headings (e.g. "Workload Management") rather than specific behaviours (e.g. "Plans, prioritises and schedules appropriate tasks effectively"), they have not answered the question as asked. This indicates insufficient preparation and failure to follow instructions. Classify as **Do Not Interview** and state this explicitly in the rationale.
-  - If behaviours are correctly identified: assess pedagogical approach (Instruction), understanding of simulator as a training environment (Management of Learning Environment), and ability to develop others (LTW).
-- **Q2 (Fuel at CNR — teaching tools)**: Dual assessment — (a) technical accuracy of content (KNO, PSD) and (b) quality of teaching approach described (Instruction, Interaction with Trainees). A strong response addresses both what the tools are AND how they would develop the trainee's thinking, not just list correct answers.
+- **Q1 (Most challenging aspects of line training)**: Although the TRI task is otherwise primarily technical, this question — shared with LTC — is a valuable opportunity to detect passion, humility and potential, including the candidate's capacity to learn from mistakes. Weigh positive signals here meaningfully; per the Cross-Cutting guidance below, their absence alone should still not be disqualifying for TRI.
+- **Q2 (F/CTL SLATS FAULT guidance)**: Dual assessment — (a) technical accuracy of the guidance (KNO, PSD) and (b) clarity and practicality of the guidance as it would actually be received and used by a command trainee (Instruction, COM).
+- **Q3 (Two behaviours from the matrix — SBT design)**: CRITICAL RULE — the candidate must select specific observable **behaviours** from the competency matrix, not competency headings. If the candidate references only competency headings (e.g. "Workload Management") rather than specific behaviours (e.g. "Plans, prioritises and schedules appropriate tasks effectively"), they have not answered the question as asked. This is a weakness that should reduce the classification but does not automatically result in Do Not Interview — consider the overall quality of the response and any instructional thinking demonstrated before reaching that conclusion.
+  - If behaviours are correctly identified: assess pedagogical approach (Instruction), understanding of simulator as a training environment (Management of Learning Environment), and ability to develop others (LTW). A strong response will also address **What** to develop, **How** to develop it, and **Where** in the session development will occur. (SBT = scenario based training.)
 
 ### TFO Assessment Focus
 - **Q1 (Ground school strategies)**: Creativity and pedagogical thinking (Instruction, Management of Learning Environment), respect for experienced crew (Interaction with Trainees), understanding of adult learning principles. Does the candidate go beyond generic answers?
@@ -97,8 +101,14 @@ You will assess each response against the easyJet Pilot Competency Matrix (9 com
 
 Across all questions, assess for evidence of:
 - **Passion**: Does the response show genuine enthusiasm? Does the candidate go beyond the minimum? Is there personal investment in the answer?
-- **Humility**: Does the candidate demonstrate honest self-awareness? Do they acknowledge limitations or areas for growth genuinely?
+- **Humility**: Does the candidate demonstrate honest self-awareness? Do they acknowledge limitations or areas for growth genuinely? Do they show evidence of having learned from past mistakes?
 - **Potential**: Is the reasoning strong? Does the candidate show capacity for reflection and growth? Would this person develop well through an instructor course?
+
+**Important role-specific guidance on Passion, Humility and Potential**:
+
+- **TFO and LTC**: The nature of these questions — particularly those involving self-reflection, coaching, and interpersonal strategy — provides good opportunity to detect passion, humility and potential. These qualities should be actively assessed and will meaningfully influence the classification. For LTC specifically, Q2 (first day strategy) is a particularly strong indicator, alongside Q1 (most challenging aspects).
+
+- **TRI**: The written task for TRI is primarily technical in nature. Passion, humility and potential are valuable if they can be detected, but the written format makes them genuinely difficult to identify overall. **Do not classify a TRI candidate as Do Not Interview solely on the grounds that these three qualities are not evident.** The primary classification criteria for TRI are relevance, accuracy, and the quality of instructional thinking demonstrated. Q1 (most challenging aspects) is the clearest opportunity within the TRI task to detect these qualities, including the candidate's capacity to learn from mistakes — if passion, humility or potential are visible there or elsewhere, treat this as a positive signal — but their absence alone is not a disqualifier.
 
 ---
 
@@ -113,12 +123,13 @@ Evaluate the following:
 - **Formatting**: Is the response well-structured and easy to read? Does it make appropriate use of paragraphs, numbered lists or headings where helpful?
 - **Style**: Is the writing style appropriate for a professional aviation context? Is it clear, concise and purposeful?
 - **Attention to detail**: Does the response feel considered and carefully prepared, or rushed and careless?
+- **Word count compliance**: Does the response respect the stated word limits where applicable? Responses significantly under the limit may indicate insufficient engagement. Responses significantly over the limit indicate a failure to follow instructions. Either direction should negatively influence the writing quality rating.
 
 A candidate who submits a badly written assignment — regardless of the content — is demonstrating the opposite of the precision and professionalism expected of an instructor. This should negatively influence the overall classification, particularly if errors are frequent or the response appears unreviewed before submission.
 
-Rate writing quality as: **Good / Acceptable / Poor**
+Rate writing quality as: **Good / Acceptable / Poor**, with the approximate total word count across all responses appended in brackets — for example: *Good (282 words)*, *Acceptable (310 words)*, *Poor (155 words)*.
 
-Add a `writing_quality` field to the JSON output with a brief comment.
+Add a `writing_quality` field to the JSON output. The `rating` value must include the word count in brackets as shown above. Use the `comment` field for a brief note on writing quality, including a word count compliance observation where the response is significantly over or under any stated limit.
 
 **Important**: When writing quality is Poor and the classification is Do Not Interview, explicitly connect the two in the rationale. For example: *"The candidate demonstrates insufficient attention to detail both in their understanding of the competency framework and in the quality of their written submission, which together indicate a lack of preparation and professional rigour expected at this level."* Poor writing quality alone is unlikely to result in Do Not Interview, but in combination with weak content it is a strong compounding signal and must be stated clearly in the rationale.
 
@@ -236,15 +247,13 @@ For PSD-B: DUAL RA Failure (requiring FCOM Level 3 consultation), ELEC DC ESS BU
 
 For FPM-E: DUAL FMGC Failure over the Alps with sick passenger, Circling approach to NCE with second pilot incapacitated, Direct Law approach in windy conditions with unsecured cabin.
 
-**Q2 response**: Referenced OM-A chapters 8.3.7.2 and 8.3.7.1.3 explicitly. Logically sequenced tools including EAT comparison, traffic assessment, alternate conditions, CNR value calculation, MINIMUM FUEL and MAYDAY FUEL declarations, delegation to F/O, FMS fuel pages, ACARS for airline assistance.
+**Q2 response**: Note — this worked example predates the current Q2 (F/CTL SLATS FAULT guidance) and was written against an earlier version of the question. It is retained here only to illustrate the standard of technical depth and teaching structure expected; a calibration example matching the current SLATS FAULT question is still needed (see Notes for Future Development).
 
-**Why Priority Interview**: Behaviours correctly identified. Technically exhaustive with specific system knowledge and regulatory references. Multiple scenario options per behaviour show deep operational experience. Q2 demonstrates both technical mastery and teaching structure. Slightly less explicit on facilitation technique than Example A but compensates with exceptional technical depth and breadth. Conscientious, reliable profile — has been trained without issues.
-
----
+**Why Priority Interview**: Behaviours correctly identified. Technically exhaustive with specific system knowledge and regulatory references. Multiple scenario options per behaviour show deep operational experience. Slightly less explicit on facilitation technique than Example A but compensates with exceptional technical depth and breadth. Conscientious, reliable profile — has been trained without issues.
 
 ---
 
-#### Example D — Balanced scenario design (Priority Interview benchmark)
+#### Example D — Balanced scenario design
 *Classification: Priority Interview*
 
 **Q1 response summary**: Behaviours correctly identified at sub-competency level (SAW-F and PSD-D) ✓. Scenario: LJU-LGW flight with door leakage malfunction causing slow depressurisation, combined with terrain threat under radar vectors and competing cabin crew communications.
@@ -263,7 +272,7 @@ For FPM-E: DUAL FMGC Failure over the Alps with sick passenger, Circling approac
 
 ---
 
-#### Example F — Instructor thinking at its clearest
+#### Example F — Instructor thinking at its clearest (What / How / Where benchmark)
 *Classification: Priority Interview*
 
 **Q1 response summary**: Behaviours correctly identified at sub-competency level (SAW-F and SAW-A) ✓. Scenario: LGW-AMS with CNR fuel state, unexpected LVP conditions at destination, slats locked on final approach. A standard, well-known scenario — not complex or original — but executed with exceptional instructional clarity.
@@ -282,7 +291,25 @@ For FPM-E: DUAL FMGC Failure over the Alps with sick passenger, Circling approac
 
 ---
 
-*Additional calibration examples to be added: LTC (all bands), TFO (all bands), TRI Maybe / Do Not Interview.*
+### TRI — Maybe Examples
+
+---
+
+#### Example G — Generic response, no specific behaviours identified
+*Classification: Maybe*
+
+**Why Maybe and not Priority Interview**: The response does not specifically identify observable behaviours from the competency matrix — the candidate speaks in general terms about competencies without anchoring to the sub-competency behaviour level. The instructional content is present but too generic to demonstrate real instructor thinking. There is some good intent but the response lacks the specificity that a well-prepared TRI candidate should demonstrate.
+
+**Why Maybe and not Do Not Interview**: The candidate engages with the question in good faith and shows some pedagogical awareness. The absence of specific behaviours may reflect unfamiliarity with the matrix format rather than a fundamental inability to think instructionally. Worth interviewing to probe further.
+
+---
+
+#### Example H — Some good points, overall too generic
+*Classification: Maybe*
+
+**Why Maybe and not Priority Interview**: The response contains some genuinely good ideas — there are moments where real instructional thinking is visible — but the overall answer is too generic. The candidate does not sustain the quality across the full response. Key elements (e.g. facilitation technique, debrief structure, how the behaviour is specifically developed) are either absent or described in broad terms that could apply to any scenario.
+
+**Why Maybe and not Borderline**: The candidate shows enough substance to be worth interviewing. There is potential here — the good points are genuine, not accidental — but the candidate needs the TRI course to develop the depth and consistency of thinking required.
 
 ---
 
@@ -329,9 +356,71 @@ For FPM-E: DUAL FMGC Failure over the Alps with sick passenger, Circling approac
 
 ---
 
+### LTC — Priority Interview Example
+
+---
+
+#### Example LTC-A — Trainee-led, well-scoped first day strategy
+*Classification: Priority Interview*
+
+**Q1 response summary**: The candidate begins with pre-flight preparation (reviewing training files), uses the Golden 5 to establish rapport and psychological safety, then facilitates a trainee-led conversation to identify personal objectives. Sets a realistic and achievable focus (workload management, task sharing) appropriate for a first day in the left seat. Explicitly addresses the PM role transition — often overlooked — and the challenge of supporting less experienced first officers. Closes with a structured debrief referencing the pilot competency matrix.
+
+**Why Priority Interview**:
+- Correctly scoped for a first day — one clear focus area, not an overwhelming list of objectives
+- Trainee-led approach demonstrates genuine coaching philosophy rather than telling
+- Explicitly addresses the PM transition challenge — this is sophisticated, operationally relevant thinking that distinguishes an experienced LTC candidate
+- Golden 5 used purposefully, not just mentioned as a formality
+- Debrief closes the loop on original objectives and references the competency matrix — shows structured instructional thinking
+- Writing is careful, considered and professionally appropriate
+
+---
+
+### LTC — Maybe Example
+
+---
+
+#### Example LTC-B — Strong Q1, missed behaviours in Q2
+*Classification: Maybe*
+
+**Q1 response summary**: High quality — thoughtful, trainee-centred strategy with a pre-check-in briefing, calibration of coaching approach, crew introductions, structured debrief with self-assessment first. Well-pitched for a first day.
+
+**Q2 response summary**: The candidate selects Communication (COM) and Flight Path Management — Manual (FPM). However, the response describes competency headings rather than specific observable behaviours from the matrix. The COM response contains genuinely good coaching ideas (thinking aloud, the three levels of support). The FPM response describes a practical approach to manual flying practice including demonstration and debrief. The instructional thinking is present, but the question as asked — to select specific **behaviours** — has not been answered correctly.
+
+**Why Maybe and not Priority Interview**: Failure to identify specific observable behaviours in Q2 is a clear gap — the question was explicit. However, the quality of Q1 is strong enough to warrant an interview. The candidate demonstrates real coaching instinct and operational awareness; the matrix literacy can be developed.
+
+**Why Maybe and not Borderline**: Q1 alone demonstrates sufficient potential and quality of thought. The weakness in Q2 is meaningful but not disqualifying given the strength elsewhere.
+
+**Key calibration note**: A candidate who misses the behaviours in Q2 but demonstrates strong instructional thinking elsewhere should not be classified as Do Not Interview. The matrix literacy gap is a development need, not an insurmountable obstacle.
+
+**Note**: This example predates the addition of the current Q1 (most challenging aspects of line training) and refers to what is now Q2/Q3 in the 3-question LTC structure — the response summaries above (Q1/Q2) correspond to the strategy question and behaviours question respectively.
+
+---
+
+### LTC — Borderline Example
+
+---
+
+#### Example LTC-C — Overly ambitious scope for a first day
+*Classification: Borderline — Human Review Required*
+
+**Q1 response summary**: Well-written and professionally structured. The candidate proposes meeting the trainee 15–20 minutes before check-in, exploring expectations, threats and self-awareness, and calibrating their coaching approach from the outset. During the day: introduces trainee to cabin crew, positions them as decision-maker, emphasises workload management and situational awareness, contextualises real-line pressures (LVO, weather, operational pressure). Closes with a structured debrief and self-assessment.
+
+**Why Borderline and not Priority Interview**:
+- The response is too much for a first day — the scope of what is set up, assessed and delivered would be overwhelming for a new captain in the left seat for the first time
+- A strong LTC candidate recognises that Day 1 is about confidence-building, not comprehensive assessment. The candidate's approach reads more like a check ride preparation plan than a supportive first day
+- The pre-briefing exploration of "threats" and "self-awareness calibration" — while sophisticated — risks unsettling a trainee at a vulnerable moment rather than settling them
+- The writing quality and structure are strong, but the instructional judgement needs refinement
+
+**Why Borderline and not Maybe**: The content is coherent and shows real preparation, but the central flaw — misjudging the appropriate scope for Day 1 — is an instructional judgement issue that a hiring manager should probe directly in interview before making a decision.
+
+**Key calibration note**: Scope and pacing are part of instructional competency. A candidate who plans too much for Day 1 is not demonstrating passion — they may be demonstrating a lack of empathy for where the trainee is at that moment. This is worth exploring in interview.
+
+**Note**: As with Example LTC-B above, this example predates the current Q1 and refers to what is now Q2 (strategy for first day) in the 3-question LTC structure.
+
+---
+
 ## Notes for Future Development
-- Calibration examples still needed: LTC (all bands), TFO (all bands), TRI Maybe / Do Not Interview
-- Word count compliance check to be added (Q1 LTC 150 words, TRI Q2 and TFO Q1/Q2 300 words)
-- Consider adding a `word_count_compliance` field to question_assessments
+- Calibration examples still needed: TFO (all bands), TRI Do Not Interview, a TRI Q2 example matching the current F/CTL SLATS FAULT question (Example B's Q2 material is retained only as a legacy illustration of expected depth — see flag in that example), and a dedicated Q1 (most challenging aspects) example for both LTC and TRI now that this question has been confirmed as a key passion/humility/potential/learning-from-mistakes indicator
+- Word count is reported within the `writing_quality.rating` value in brackets (e.g. *Good (282 words)*) — no separate JSON field added
 - Questions may change over time — criteria and classification bands are stable
 - Once all calibration examples are added, prompt is ready for Python API integration

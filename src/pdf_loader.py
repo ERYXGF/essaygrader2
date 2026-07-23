@@ -55,8 +55,9 @@ def load_essays(folder_path: str) -> List[Dict]:
     ------
     FileNotFoundError : if the folder doesn't exist
     ValueError        : if the folder contains no PDFs, a filename is malformed,
-                        a role is unrecognised, a candidate number is duplicated,
-                        or a PDF appears to be scanned/empty.
+                        a role is unrecognised, a candidate number + role
+                        combination is duplicated, or a PDF appears to be
+                        scanned/empty.
     """
     folder = Path(folder_path)
  
@@ -70,23 +71,23 @@ def load_essays(folder_path: str) -> List[Dict]:
     if not pdf_paths:
         raise ValueError(f"No PDF files found in {folder}")
  
-    seen_numbers: Dict[str, str] = {}  # candidate_number -> filename (for dup detection)
+    seen: Dict[Tuple[str, str], str] = {}  # (candidate_number, role) -> filename
     essays: List[Dict] = []
  
     for pdf_path in pdf_paths:
         candidate_number, role = _parse_filename(pdf_path.name)
  
-        # Duplicate-number check. The user confirmed numbers are unique;
-        # this guard catches accidental copies (e.g. "12345_LTC_assesment (1).pdf"
-        # which wouldn't even match the regex, but also a legitimate-looking
-        # "12345_LTC_assesment.pdf" alongside "12345_TFO_assesment.pdf").
-        if candidate_number in seen_numbers:
+        # Duplicate check. A candidate may legitimately apply for more than
+        # one role (e.g. "11111_LTC_..." alongside "11111_TRI_..."), so only
+        # the same number AND role counts as a duplicate.
+        key = (candidate_number, role)
+        if key in seen:
             raise ValueError(
-                f"Duplicate candidate number {candidate_number}: "
-                f"appears in both '{seen_numbers[candidate_number]}' "
+                f"Duplicate submission for candidate {candidate_number}, "
+                f"role {role}: appears in both '{seen[key]}' "
                 f"and '{pdf_path.name}'."
             )
-        seen_numbers[candidate_number] = pdf_path.name
+        seen[key] = pdf_path.name
  
         essay_text = _extract_pdf_text(pdf_path)
  
