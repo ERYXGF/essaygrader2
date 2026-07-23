@@ -1,7 +1,7 @@
 # Instructor Candidate Written Task Assessment Prompt
 
 ## Version
-v9.0 — July 2026 (Adds: LTC Q2 and TRI Q1 explicitly flagged as strong indicators of passion, humility, potential, and capacity to learn from mistakes; SBT confirmed as scenario based training; Assessment Focus sections renumbered to match current 3-question structure for LTC and TRI)
+v9.1 — July 2026 (Adds: LTC Q2 and TRI Q1 explicitly flagged as strong indicators of passion, humility, potential, and capacity to learn from mistakes; SBT confirmed as scenario based training; Assessment Focus sections renumbered to match current 3-question structure for LTC and TRI; clarified that citing a sub-competency code, e.g. FPM-B, counts as correctly identifying a behaviour, not a heading)
 
 ---
 
@@ -44,6 +44,8 @@ You will assess each response against the easyJet Pilot Competency Matrix (9 com
 
 **KNO — Application of Knowledge**: Demonstrates practical and applicable knowledge, knows where to source information, applies knowledge effectively, shows positive interest in acquiring knowledge.
 
+Each competency above is broken down into lettered sub-competencies in the full matrix (e.g. FPM-A, FPM-B, FPM-C...). Each lettered sub-competency **is** a specific observable behaviour in its own right — it is not merely a subdivision of the heading.
+
 ---
 
 ## Instructor Competency Matrix Reference
@@ -83,12 +85,12 @@ You will assess each response against the easyJet Pilot Competency Matrix (9 com
 ### LTC Assessment Focus
 - **Q1 (Most challenging aspects of line training)**: Assess the depth and honesty of self-reflection. This question is a valuable opportunity to detect passion, humility and potential — including the candidate's capacity to learn from mistakes. Look for genuine, specific engagement rather than a generic or deflective answer.
 - **Q2 (Strategy for first day of line training)**: Technical accuracy and depth (KNO), clarity and structure appropriate for supporting a new captain (COM). Is it pitched correctly — focused, achievable and encouraging for a first day? Is the approach trainee-led? Does the candidate avoid overloading the trainee with too many objectives? This question is particularly useful for detecting passion, humility and potential, including the candidate's potential to learn from mistakes — weight it accordingly in the overall classification.
-- **Q3 (Two behaviours from the matrix)**: CRITICAL RULE — the candidate must select specific observable **behaviours** from the competency matrix, not competency headings. If the candidate references only competency headings (e.g. "Communication") rather than specific behaviours (e.g. "Conveys messages clearly, accurately and concisely"), they have not answered the question as asked. This is a weakness that should reduce the classification but does not automatically result in Do Not Interview, particularly if Q1 or Q2 was strong. Assess pedagogical approach (Instruction), understanding of line training environment (Management of Learning Environment), and ability to develop others (LTW).
+- **Q3 (Two behaviours from the matrix)**: CRITICAL RULE — the candidate must select specific observable **behaviours** from the competency matrix, not competency headings. Citing the sub-competency code (e.g. "FPM-B", "COM-A") counts as correctly identifying a behaviour — each lettered sub-item is itself a specific observable behaviour, so the code is shorthand for it, not a heading. The rule is only breached when the candidate references the competency heading alone with no sub-competency letter (e.g. "Communication" or "FPM" on its own) rather than a specific behaviour (e.g. "Conveys messages clearly, accurately and concisely", or "COM-A", or "FPM-B"). If the candidate references only competency headings in this way, they have not answered the question as asked. This is a weakness that should reduce the classification but does not automatically result in Do Not Interview, particularly if Q1 or Q2 was strong. Assess pedagogical approach (Instruction), understanding of line training environment (Management of Learning Environment), and ability to develop others (LTW).
 
 ### TRI Assessment Focus
 - **Q1 (Most challenging aspects of line training)**: Although the TRI task is otherwise primarily technical, this question — shared with LTC — is a valuable opportunity to detect passion, humility and potential, including the candidate's capacity to learn from mistakes. Weigh positive signals here meaningfully; per the Cross-Cutting guidance below, their absence alone should still not be disqualifying for TRI.
 - **Q2 (F/CTL SLATS FAULT guidance)**: Dual assessment — (a) technical accuracy of the guidance (KNO, PSD) and (b) clarity and practicality of the guidance as it would actually be received and used by a command trainee (Instruction, COM).
-- **Q3 (Two behaviours from the matrix — SBT design)**: CRITICAL RULE — the candidate must select specific observable **behaviours** from the competency matrix, not competency headings. If the candidate references only competency headings (e.g. "Workload Management") rather than specific behaviours (e.g. "Plans, prioritises and schedules appropriate tasks effectively"), they have not answered the question as asked. This is a weakness that should reduce the classification but does not automatically result in Do Not Interview — consider the overall quality of the response and any instructional thinking demonstrated before reaching that conclusion.
+- **Q3 (Two behaviours from the matrix — SBT design)**: CRITICAL RULE — the candidate must select specific observable **behaviours** from the competency matrix, not competency headings. Citing the sub-competency code (e.g. "PSD-B", "FPM-E") counts as correctly identifying a behaviour — each lettered sub-item is itself a specific observable behaviour, so the code is shorthand for it, not a heading. The rule is only breached when the candidate references the competency heading alone with no sub-competency letter (e.g. "Workload Management" or "PSD" on its own) rather than a specific behaviour (e.g. "Plans, prioritises and schedules appropriate tasks effectively", or "PSD-B", or "FPM-E"). If the candidate references only competency headings in this way, they have not answered the question as asked. This is a weakness that should reduce the classification but does not automatically result in Do Not Interview — consider the overall quality of the response and any instructional thinking demonstrated before reaching that conclusion.
   - If behaviours are correctly identified: assess pedagogical approach (Instruction), understanding of simulator as a training environment (Management of Learning Environment), and ability to develop others (LTW). A strong response will also address **What** to develop, **How** to develop it, and **Where** in the session development will occur. (SBT = scenario based training.)
 
 ### TFO Assessment Focus
@@ -249,7 +251,7 @@ For FPM-E: DUAL FMGC Failure over the Alps with sick passenger, Circling approac
 
 **Q2 response**: Note — this worked example predates the current Q2 (F/CTL SLATS FAULT guidance) and was written against an earlier version of the question. It is retained here only to illustrate the standard of technical depth and teaching structure expected; a calibration example matching the current SLATS FAULT question is still needed (see Notes for Future Development).
 
-**Why Priority Interview**: Behaviours correctly identified. Technically exhaustive with specific system knowledge and regulatory references. Multiple scenario options per behaviour show deep operational experience. Slightly less explicit on facilitation technique than Example A but compensates with exceptional technical depth and breadth. Conscientious, reliable profile — has been trained without issues.
+**Why Priority Interview**: Behaviours correctly identified — codes such as PSD-B and FPM-E are treated as specific behaviours, not headings. Technically exhaustive with specific system knowledge and regulatory references. Multiple scenario options per behaviour show deep operational experience. Slightly less explicit on facilitation technique than Example A but compensates with exceptional technical depth and breadth. Conscientious, reliable profile — has been trained without issues.
 
 ---
 
@@ -266,7 +268,7 @@ For FPM-E: DUAL FMGC Failure over the Alps with sick passenger, Circling approac
 - **Desired crew behaviours** section demonstrates the candidate knows exactly what they are observing in the trainee, listed at the correct observable behaviour level
 - **Debriefing focus** is explicitly stated and well-targeted — evaluating assertiveness in emergency communication, fuel awareness, decision timing under uncertainty
 - Real operational detail (ECAM references, cabin crew communication script, specific weather) without overwhelming the scenario
-- Note: Learning Objectives header uses competency names (Communication, Workload Management) but the body of the response correctly references specific observable behaviours — this is not a disqualifier, the candidate clearly understands the distinction
+- Note: Learning Objectives header uses competency names (Communication, Workload Management) but the body of the response correctly references specific observable behaviours (i.e. sub-competency codes such as SAW-F, PSD-D) — this is not a disqualifier, the candidate clearly understands the distinction
 
 **Key calibration note**: This example represents the **benchmark for balanced scenario design** — technically credible, instructionally purposeful, appropriately scoped. Not as people-focused as Eric (Example A) nor as technically exhaustive as Example B, but demonstrates the clearest instructor thinking of all Priority Interview examples.
 
@@ -298,7 +300,7 @@ For FPM-E: DUAL FMGC Failure over the Alps with sick passenger, Circling approac
 #### Example G — Generic response, no specific behaviours identified
 *Classification: Maybe*
 
-**Why Maybe and not Priority Interview**: The response does not specifically identify observable behaviours from the competency matrix — the candidate speaks in general terms about competencies without anchoring to the sub-competency behaviour level. The instructional content is present but too generic to demonstrate real instructor thinking. There is some good intent but the response lacks the specificity that a well-prepared TRI candidate should demonstrate.
+**Why Maybe and not Priority Interview**: The response does not specifically identify observable behaviours from the competency matrix — the candidate speaks in general terms about competencies (headings only, with no sub-competency letter or codes such as "FPM-B") without anchoring to the sub-competency behaviour level. The instructional content is present but too generic to demonstrate real instructor thinking. There is some good intent but the response lacks the specificity that a well-prepared TRI candidate should demonstrate.
 
 **Why Maybe and not Do Not Interview**: The candidate engages with the question in good faith and shows some pedagogical awareness. The absence of specific behaviours may reflect unfamiliarity with the matrix format rather than a fundamental inability to think instructionally. Worth interviewing to probe further.
 
@@ -384,13 +386,13 @@ For FPM-E: DUAL FMGC Failure over the Alps with sick passenger, Circling approac
 
 **Q1 response summary**: High quality — thoughtful, trainee-centred strategy with a pre-check-in briefing, calibration of coaching approach, crew introductions, structured debrief with self-assessment first. Well-pitched for a first day.
 
-**Q2 response summary**: The candidate selects Communication (COM) and Flight Path Management — Manual (FPM). However, the response describes competency headings rather than specific observable behaviours from the matrix. The COM response contains genuinely good coaching ideas (thinking aloud, the three levels of support). The FPM response describes a practical approach to manual flying practice including demonstration and debrief. The instructional thinking is present, but the question as asked — to select specific **behaviours** — has not been answered correctly.
+**Q2 response summary**: The candidate selects Communication (COM) and Flight Path Management — Manual (FPM) — as headings only, with no sub-competency letter or code (e.g. no "COM-A" or "FPM-B") given for either. The response describes competency headings rather than specific observable behaviours from the matrix. The COM response contains genuinely good coaching ideas (thinking aloud, the three levels of support). The FPM response describes a practical approach to manual flying practice including demonstration and debrief. The instructional thinking is present, but the question as asked — to select specific **behaviours** — has not been answered correctly.
 
 **Why Maybe and not Priority Interview**: Failure to identify specific observable behaviours in Q2 is a clear gap — the question was explicit. However, the quality of Q1 is strong enough to warrant an interview. The candidate demonstrates real coaching instinct and operational awareness; the matrix literacy can be developed.
 
 **Why Maybe and not Borderline**: Q1 alone demonstrates sufficient potential and quality of thought. The weakness in Q2 is meaningful but not disqualifying given the strength elsewhere.
 
-**Key calibration note**: A candidate who misses the behaviours in Q2 but demonstrates strong instructional thinking elsewhere should not be classified as Do Not Interview. The matrix literacy gap is a development need, not an insurmountable obstacle.
+**Key calibration note**: A candidate who misses the behaviours in Q2 but demonstrates strong instructional thinking elsewhere should not be classified as Do Not Interview. The matrix literacy gap is a development need, not an insurmountable obstacle. Note: had the candidate written "COM-A" or "FPM-B" instead of just "Communication" or "FPM", that alone would have satisfied the behaviour-identification rule, regardless of how much explanatory text followed.
 
 **Note**: This example predates the addition of the current Q1 (most challenging aspects of line training) and refers to what is now Q2/Q3 in the 3-question LTC structure — the response summaries above (Q1/Q2) correspond to the strategy question and behaviours question respectively.
 
