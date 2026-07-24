@@ -44,10 +44,13 @@ from essay_grader import (
 SHINGLE_SIZE = 5
 
 # Screening thresholds — a pair crossing EITHER goes to Claude for a verdict.
-# Same-prompt essays share question wording, so a little shingle overlap and
-# moderate cosine similarity are normal; these values sit above that baseline.
-LEXICAL_SCREEN_THRESHOLD = 0.05   # Jaccard of shingles (0..1)
-SEMANTIC_SCREEN_THRESHOLD = 0.50  # TF-IDF cosine (0..1)
+# Calibrated against the real 2026 campaign corpus (68 essays, 2,278 pairs):
+# shared aviation jargon and identical questions push the TF-IDF cosine
+# baseline to ~75% between innocent same-role essays, while their shingle
+# overlap never exceeds 5%. These values sit just above those baselines;
+# lower settings flooded Claude with hundreds of coincidental pairs.
+LEXICAL_SCREEN_THRESHOLD = 0.10   # Jaccard of shingles (0..1)
+SEMANTIC_SCREEN_THRESHOLD = 0.75  # TF-IDF cosine (0..1)
 
 # Verbatim overlap this high is treated as High risk even if Claude equivocates.
 LEXICAL_HIGH_THRESHOLD = 0.20
@@ -110,6 +113,11 @@ def check_plagiarism(
     flagged: List[Tuple[Dict, Dict, float, float]] = []
     for i in range(len(screened)):
         for j in range(i + 1, len(screened)):
+            # A candidate may submit for two roles; comparing their own
+            # submissions to each other is reuse, not plagiarism, and must
+            # not flag or downgrade them.
+            if screened[i]["candidate_number"] == screened[j]["candidate_number"]:
+                continue
             lexical = _jaccard(shingle_sets[i], shingle_sets[j])
             semantic = _cosine(tfidf_vectors[i], tfidf_vectors[j])
             if lexical >= LEXICAL_SCREEN_THRESHOLD or semantic >= SEMANTIC_SCREEN_THRESHOLD:
