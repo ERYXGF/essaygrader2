@@ -426,3 +426,12 @@ For FPM-E: DUAL FMGC Failure over the Alps with sick passenger, Circling approac
 - Word count is reported within the `writing_quality.rating` value in brackets (e.g. *Good (282 words)*) — no separate JSON field added
 - Questions may change over time — criteria and classification bands are stable
 - Once all calibration examples are added, prompt is ready for Python API integration
+
+---
+
+## JSON string rules (critical)
+
+The output must be strictly valid JSON that passes a JSON parser:
+- Never put an unescaped double-quote character (") inside a string value.
+- When quoting phrases from the candidate's essay, wrap them in single quotes (') instead of double quotes — e.g. "the candidate writes 'learning when to say 'No' was an important lesson'".
+- No trailing commas, no comments, no text outside the JSON object.

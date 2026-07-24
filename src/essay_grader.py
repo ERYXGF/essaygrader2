@@ -4,7 +4,7 @@ import os
 import json
 import time
 from pathlib import Path
-from typing import List, Dict
+from typing import List, Dict, Optional
  
 import httpx
 from dotenv import load_dotenv
@@ -27,6 +27,12 @@ MAX_TOKENS = 8000
  
 # Retry policy for transient connection errors.
 MAX_RETRIES = 4
+
+# How many corrective re-asks we allow when Claude returns invalid JSON
+# (typically unescaped quotes from quoting essay text). Plain retries are
+# pointless at temperature 0 (same input → same output), so each re-ask
+# feeds the invalid output and parse error back to Claude.
+PARSE_FIX_ATTEMPTS = 2
  
 # The grading prompt lives at <project_root>/config/essay_prompt.txt.
 # This file is in <project_root>/src, so we go up one level then into config.
@@ -116,37 +122,47 @@ def grade_essay(
     model: str = DEFAULT_MODEL,
 ) -> Dict:
     """Sends a single essay to Claude and returns the parsed result.
- 
-    Fail-fast policy
-    ----------------
-    Authentication errors, rate-limit errors, and JSON-parse errors raise
-    immediately and stop the run. Connection errors are retried with
-    exponential backoff before giving up.
- 
-    Empty essays (data condition, not system failure) return a normal row
-    flagged with classification='error'.
+
+    Failure policy
+    --------------
+    Authentication and rate-limit errors raise immediately and stop the run.
+    Connection errors are retried with exponential backoff. Invalid JSON gets
+    corrective re-asks; if that still fails, the candidate gets a normal row
+    flagged classification='error' (manual grading) rather than aborting a
+    run whose earlier grading cost has already been spent.
+
+    Empty essays (data condition, not system failure) also return an
+    'error' row.
     """
     if not essay_text or not essay_text.strip():
-        return _empty_essay_result(candidate_number, role)
- 
-    raw_output = _call_claude_with_retry(
+        return _error_result(candidate_number, role, "Empty essay submission")
+
+    messages = [{
+        "role": "user",
+        "content": (
+            f"Candidate number: {candidate_number}\n"
+            f"Role: {role}\n\n"
+            f"Essay:\n{essay_text}"
+        ),
+    }]
+
+    result = _json_with_corrective_retries(
         client=client,
         model=model,
         system=grading_prompt,
-        candidate_number=candidate_number,
-        role=role,
-        essay_text=essay_text,
+        messages=messages,
+        max_tokens=MAX_TOKENS,
+        context_label=f"grading response for candidate {candidate_number}",
     )
- 
-    try:
-        json_text = _extract_first_json_object(raw_output)
-        result = json.loads(json_text)
-    except (ValueError, json.JSONDecodeError) as exc:
-        raise ValueError(
-            f"Could not parse JSON from Claude's response for candidate "
-            f"{candidate_number}.\nReason: {exc}\nRaw response:\n{raw_output}"
-        ) from exc
- 
+
+    if result is None:
+        return _error_result(
+            candidate_number,
+            role,
+            f"Claude's grading response could not be parsed as JSON after "
+            f"{1 + PARSE_FIX_ATTEMPTS} attempts - manual grading required.",
+        )
+
     return _normalise_result(result, candidate_number, role)
  
  
@@ -187,75 +203,113 @@ def grade_essays(essays: List[Dict], model: str = DEFAULT_MODEL) -> List[Dict]:
  
  
 # ============================================================
-# NETWORK CALL WITH RETRY
+# NETWORK CALL WITH RETRY + JSON RECOVERY (shared with plagiarism_checker)
 # ============================================================
-def _call_claude_with_retry(
+def _stream_with_retry(
     client: anthropic.Anthropic,
     model: str,
     system: str,
-    candidate_number: str,
-    role: str,
-    essay_text: str,
+    messages: List[Dict],
+    max_tokens: int,
+    context_label: str,
     max_retries: int = MAX_RETRIES,
 ) -> str:
-    """Calls Claude using streaming mode and retries on transient errors."""
-    last_exc: Exception | None = None
- 
+    """Streams one completion, retrying transient connection errors and
+    failing loudly if the response hits the output-token cap."""
     for attempt in range(1, max_retries + 1):
         try:
             with client.messages.stream(
                 model=model,
-                max_tokens=MAX_TOKENS,
+                max_tokens=max_tokens,
                 temperature=0,
                 system=system,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": (
-                            f"Candidate number: {candidate_number}\n"
-                            f"Role: {role}\n\n"
-                            f"Essay:\n{essay_text}"
-                        ),
-                    }
-                ],
+                messages=messages,
             ) as stream:
-                text = "".join(stream.text_stream).strip()
+                raw_output = "".join(stream.text_stream).strip()
                 stop_reason = stream.get_final_message().stop_reason
-                if stop_reason == "max_tokens":
-                    raise ValueError(
-                        f"Response for candidate {candidate_number} hit the "
-                        f"{MAX_TOKENS}-token output limit and was cut off. "
-                        f"Increase MAX_TOKENS in essay_grader.py."
-                    )
-                return text
- 
+            if stop_reason == "max_tokens":
+                raise ValueError(
+                    f"The {context_label} hit the {max_tokens}-token output "
+                    f"limit and was cut off. Increase the corresponding "
+                    f"max-tokens constant."
+                )
+            return raw_output
         except RETRYABLE_EXCEPTIONS as exc:
-            last_exc = exc
             if attempt < max_retries:
                 wait = 2 ** attempt  # 2s, 4s, 8s, 16s
-                err_type = type(exc).__name__
                 print(
-                    f"     ⚠ {err_type} (attempt {attempt}/{max_retries}); "
+                    f"     ! {type(exc).__name__} (attempt {attempt}/{max_retries}); "
                     f"retrying in {wait}s..."
                 )
                 time.sleep(wait)
             else:
                 raise
- 
-    assert last_exc is not None
-    raise last_exc
+    raise AssertionError("unreachable")
+
+
+def _json_with_corrective_retries(
+    client: anthropic.Anthropic,
+    model: str,
+    system: str,
+    messages: List[Dict],
+    max_tokens: int,
+    context_label: str,
+) -> Optional[Dict]:
+    """Gets a JSON object from Claude, re-asking with the parse error fed
+    back when the output is invalid (typically unescaped quotes from quoting
+    essay text; a plain retry is pointless at temperature 0).
+
+    Returns the parsed dict, or None when every attempt was unparseable —
+    callers decide their own fallback.
+    """
+    for parse_attempt in range(1 + PARSE_FIX_ATTEMPTS):
+        raw_output = _stream_with_retry(
+            client=client,
+            model=model,
+            system=system,
+            messages=messages,
+            max_tokens=max_tokens,
+            context_label=context_label,
+        )
+        try:
+            return json.loads(_extract_first_json_object(raw_output))
+        except (ValueError, json.JSONDecodeError) as exc:
+            if parse_attempt < PARSE_FIX_ATTEMPTS:
+                print(
+                    f"     ! Invalid JSON in {context_label} ({exc}); "
+                    f"asking Claude to correct it..."
+                )
+                messages = messages + [
+                    {"role": "assistant", "content": raw_output},
+                    {
+                        "role": "user",
+                        "content": (
+                            f"Your previous response was not valid JSON "
+                            f"(parser error: {exc}). Re-send the same response "
+                            f"as strictly valid JSON. Never put an unescaped "
+                            f"double-quote character inside a string value; "
+                            f"use single quotes for any quoted phrases. "
+                            f"Output only the JSON object."
+                        ),
+                    },
+                ]
+    print(
+        f"     ! Could not obtain valid JSON for {context_label} after "
+        f"{1 + PARSE_FIX_ATTEMPTS} attempts."
+    )
+    return None
  
  
 # ============================================================
 # RESULT SHAPING
 # ============================================================
-def _empty_essay_result(candidate_number: str, role: str) -> Dict:
-    """Standard result row for empty submissions."""
+def _error_result(candidate_number: str, role: str, reason: str) -> Dict:
+    """Standard result row for essays that could not be graded."""
     return {
         "candidate_number": candidate_number,
         "Role": role,
         "classification": "error",
-        "rationale": "Empty essay submission",
+        "rationale": reason,
         "cross_cutting_assessment": {},
         "strengths": [],
         "weaknesses": [],
