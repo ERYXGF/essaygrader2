@@ -6,7 +6,14 @@ Flow:  PDFs in input/essays/  →  Claude grading  →  plagiarism screen  →  
 from pathlib import Path
 
 from pdf_loader import load_essays
-from essay_grader import grade_essays
+from essay_grader import grade_essays, _load_grading_prompt
+from grading_cache import (
+    load_cache,
+    save_cache,
+    prompt_hash,
+    partition,
+    merge_and_update,
+)
 from plagiarism_checker import check_plagiarism, apply_plagiarism_overrides
 from report_writer import write_report
 
@@ -23,6 +30,7 @@ def run_pipeline() -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     report_file = output_dir / "ai_essay_grading_report.xlsx"
+    cache_file = output_dir / "grading_cache.json"
 
     print("🚀 Pipeline starting...")
 
@@ -34,21 +42,42 @@ def run_pipeline() -> None:
     print(f"   ✓ Loaded {len(essays)} essay(s)")
 
     # ============================================================
-    # STEP 2 — CLAUDE GRADING
+    # STEP 2 — CLAUDE GRADING (incremental — cached grades reused)
     # ============================================================
-    print("📤 Sending essays to Claude...")
-    results = grade_essays(essays)
+    # Only new or changed essays are graded. If the rubric changed, the whole
+    # cache is stale and everything is regraded (handled inside partition()).
+    cache = load_cache(str(cache_file))
+    current_prompt_hash = prompt_hash(_load_grading_prompt())
+    to_grade, reused = partition(essays, cache, current_prompt_hash)
+    print(
+        f"🗃️  Reusing {len(reused)} cached grade(s); "
+        f"grading {len(to_grade)} new/changed essay(s)"
+    )
+
+    if to_grade:
+        print("📤 Sending essays to Claude...")
+        new_results = grade_essays(to_grade)
+    else:
+        print("   ✓ Nothing to grade — all essays served from cache")
+        new_results = []
+
+    graded = list(zip(to_grade, new_results))
+    results, plagiarism_essays = merge_and_update(
+        cache, essays, graded, current_prompt_hash
+    )
+    save_cache(str(cache_file), cache)
 
     if not results:
-        raise ValueError("No results returned from Claude grading step")
+        raise ValueError("No results available (no essays graded or cached)")
 
     # ============================================================
     # STEP 3 — PLAGIARISM SCREEN
     # ============================================================
-    # Cheap lexical screen over every pair; only flagged pairs go to Claude.
-    # High-risk matches downgrade 'Priority Interview' to 'Maybe'.
+    # Runs across the full corpus (folder + cached essays), not just the new
+    # ones. Cheap lexical screen over every pair; only flagged pairs go to
+    # Claude. High-risk matches downgrade 'Priority Interview' to 'Maybe'.
     print("🔍 Screening essay pairs for plagiarism...")
-    similarity_pairs = check_plagiarism(essays)
+    similarity_pairs = check_plagiarism(plagiarism_essays)
     apply_plagiarism_overrides(results, similarity_pairs)
     print(f"   ✓ {len(similarity_pairs)} pair(s) flagged for review")
 
