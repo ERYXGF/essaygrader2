@@ -9,6 +9,8 @@ from typing import List, Dict, Optional
 import httpx
 from dotenv import load_dotenv
 import anthropic
+
+from pdf_loader import WRONG_FORMAT_FLAG
  
  
 # ============================================================
@@ -184,7 +186,26 @@ def grade_essays(essays: List[Dict], model: str = DEFAULT_MODEL) -> List[Dict]:
         candidate_number = essay["candidate_number"]
         role = essay["role"]
         essay_text = essay["essay_text"]
- 
+
+        # Unreadable submissions never reach Claude: no text to grade, and
+        # no API spend. They are reported as 'wrong format' instead.
+        if essay.get("wrong_format"):
+            source = essay.get("source_file", "")
+            print(
+                f"  → Skipping {idx}/{total} (candidate {candidate_number}): "
+                f"'{source}' is not a PDF"
+            )
+            reason = essay.get("format_reason") or f"'{source}' is not a PDF."
+            result = _error_result(
+                candidate_number,
+                role,
+                f"{reason} Not graded - the candidate must resubmit as a PDF.",
+                writing_quality_rating=WRONG_FORMAT_FLAG,
+            )
+            result["source_file"] = source
+            results.append(result)
+            continue
+
         print(f"  → Grading {idx}/{total} (candidate {candidate_number}, role {role})")
  
         result = grade_essay(
@@ -303,8 +324,17 @@ def _json_with_corrective_retries(
 # ============================================================
 # RESULT SHAPING
 # ============================================================
-def _error_result(candidate_number: str, role: str, reason: str) -> Dict:
-    """Standard result row for essays that could not be graded."""
+def _error_result(
+    candidate_number: str,
+    role: str,
+    reason: str,
+    writing_quality_rating: str = "",
+) -> Dict:
+    """Standard result row for essays that could not be graded.
+
+    writing_quality_rating surfaces the reason in the report's Writing
+    Quality column (used for 'wrong format'); left blank it stays empty.
+    """
     return {
         "candidate_number": candidate_number,
         "Role": role,
@@ -313,7 +343,11 @@ def _error_result(candidate_number: str, role: str, reason: str) -> Dict:
         "cross_cutting_assessment": {},
         "strengths": [],
         "weaknesses": [],
-        "writing_quality": {},
+        "writing_quality": (
+            {"rating": writing_quality_rating, "comment": reason}
+            if writing_quality_rating
+            else {}
+        ),
         "ai_usage_probability": "unknown",
         "ai_usage_indicators": "",
         "question_assessments": [],

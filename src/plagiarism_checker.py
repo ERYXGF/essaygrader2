@@ -66,8 +66,9 @@ PAIR_REVIEW_MAX_TOKENS = 1500
 BASE_DIR = Path(__file__).resolve().parent
 PROMPT_FILE = BASE_DIR.parent / "config" / "plagiarism_prompt.txt"
 
-# Flag text shown in the Summary sheet for essays that could not be screened.
-NOT_SCREENED_FLAG = "not screened (empty essay)"
+# Flag text shown in the Summary sheet for essays that could not be screened
+# (empty submission, or a file we could not read as a PDF).
+NOT_SCREENED_FLAG = "not screened (no essay text)"
 
 
 # ============================================================
