@@ -2,6 +2,7 @@
  
 The report has up to three sheets:
 - Summary    : one row per candidate, headline grades, colour-coded classification,
+               a File Format column flagging submissions that aren't PDFs,
                three feedback columns (Human Override / Override Reason /
                Reviewed) ready for the eventual RAG phase, and a Plagiarism Flag
                column (colour-coded, empty when clean).
@@ -65,6 +66,7 @@ def write_report(
         "Potential",
         "Writing Quality",
         "AI Risk",
+        "File Format",
         "Human Override",
         "Override Reason",
         "Reviewed",
@@ -89,6 +91,7 @@ def write_report(
             cca.get("potential", ""),
             writing.get("rating", ""),
             r.get("ai_usage_probability", ""),
+            r.get("format_label", ""),
             "",  # Human Override (blank — reviewer fills in)
             "",  # Override Reason
             "",  # Reviewed
@@ -98,6 +101,12 @@ def write_report(
         for col, val in enumerate(values, 1):
             cell = ws1.cell(row=row_idx, column=col, value=val)
             cell.alignment = center
+
+        # File format: a readable Word/Pages submission is graded normally,
+        # but the interviewers cannot open it, so highlight the row.
+        format_cell = ws1.cell(row=row_idx, column=summary_headers.index("File Format") + 1)
+        if str(format_cell.value or "").startswith("wrong format"):
+            format_cell.fill = yellow
 
         # Plagiarism flag: wrap (can hold one line per matched pair) and
         # colour-band by risk so flagged rows stand out at a glance.
