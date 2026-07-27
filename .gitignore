@@ -24,3 +24,6 @@ input/
 
 .DS_Store
 **/.DS_Store
+
+#The essay prompt (to not see the questions)
+essay_prompt.txt
