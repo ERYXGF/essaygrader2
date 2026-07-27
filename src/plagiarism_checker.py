@@ -59,8 +59,10 @@ _VERDICT_RISK = {
     "likely_coincidence": "Low",
 }
 
-# Output cap for the pair-review call — the verdict JSON is short.
-PAIR_REVIEW_MAX_TOKENS = 1500
+# Output cap for the pair-review call. The verdict JSON is short, but on
+# Sonnet 5 adaptive thinking draws from the same budget, so 1500 would leave
+# the verdict itself truncated.
+PAIR_REVIEW_MAX_TOKENS = 8000
 
 # The pair-review prompt lives next to the grading prompt in config/.
 BASE_DIR = Path(__file__).resolve().parent

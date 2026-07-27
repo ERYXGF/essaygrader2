@@ -16,22 +16,23 @@ import anthropic
 # ============================================================
 load_dotenv()
  
-# Current production Haiku model (April 2026). Anthropic retired
-# claude-3-haiku-20240307 in February 2026.
-DEFAULT_MODEL = "claude-haiku-4-5-20251001"
+# Claude Sonnet 5. Thinking is adaptive by default on this model (Haiku 4.5
+# did not think at all), which raises both grading quality and token spend.
+DEFAULT_MODEL = "claude-sonnet-5"
  
-# Output token cap. Thorough verdicts with per-question assessments
-# (prompt v9.0) can exceed 4000 tokens for strong candidates, so this
-# needs generous headroom. Truncation is detected and reported explicitly.
-MAX_TOKENS = 8000
+# Output token cap. On Sonnet 5 this covers adaptive thinking AND the answer,
+# so it needs far more headroom than the ~5000 tokens a thorough verdict uses
+# on its own. It is a ceiling, not a reservation - unused tokens cost nothing.
+# Truncation is detected and reported explicitly.
+MAX_TOKENS = 24000
  
 # Retry policy for transient connection errors.
 MAX_RETRIES = 4
 
 # How many corrective re-asks we allow when Claude returns invalid JSON
-# (typically unescaped quotes from quoting essay text). Plain retries are
-# pointless at temperature 0 (same input → same output), so each re-ask
-# feeds the invalid output and parse error back to Claude.
+# (typically unescaped quotes from quoting essay text). Each re-ask feeds the
+# invalid output and the parse error back to Claude rather than repeating the
+# request, so the model is told what to fix instead of guessing again.
 PARSE_FIX_ATTEMPTS = 2
  
 # The grading prompt lives at <project_root>/config/essay_prompt.txt.
@@ -242,7 +243,6 @@ def _stream_with_retry(
             with client.messages.stream(
                 model=model,
                 max_tokens=max_tokens,
-                temperature=0,
                 system=system,
                 messages=messages,
             ) as stream:
@@ -278,7 +278,7 @@ def _json_with_corrective_retries(
 ) -> Optional[Dict]:
     """Gets a JSON object from Claude, re-asking with the parse error fed
     back when the output is invalid (typically unescaped quotes from quoting
-    essay text; a plain retry is pointless at temperature 0).
+    essay text); the correction is what fixes it, not the retry itself.
 
     Returns the parsed dict, or None when every attempt was unparseable —
     callers decide their own fallback.

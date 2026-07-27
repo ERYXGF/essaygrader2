@@ -154,6 +154,14 @@ def merge_and_update(
             result = candidates[key]["result"]  # reused unchanged
         else:
             continue  # shouldn't happen: every folder essay is graded or cached
+
+        # The cached grade stays valid when the essay text is unchanged, but
+        # the file carrying it may have been resubmitted in a different
+        # format. The label describes the file, not the grade, so always take
+        # it from this run's load rather than the cache.
+        if "format_label" in essay:
+            result = {**result, "format_label": essay["format_label"]}
+
         candidates[key] = {
             "candidate_number": essay["candidate_number"],
             "role": essay["role"],
