@@ -4,7 +4,7 @@ import os
 import json
 import time
 from pathlib import Path
-from typing import List, Dict, Optional
+from typing import Callable, List, Dict, Optional
  
 import httpx
 from dotenv import load_dotenv
@@ -170,8 +170,17 @@ def grade_essay(
 # ============================================================
 # BATCH ENTRY POINT
 # ============================================================
-def grade_essays(essays: List[Dict], model: str = DEFAULT_MODEL) -> List[Dict]:
-    """Grades every essay in the list."""
+def grade_essays(
+    essays: List[Dict],
+    model: str = DEFAULT_MODEL,
+    on_result: Optional[Callable[[Dict, Dict], None]] = None,
+) -> List[Dict]:
+    """Grades every essay in the list.
+
+    on_result, if given, is called with (essay, result) as each essay finishes.
+    The pipeline uses it to persist each grade immediately, so a run that dies
+    partway through keeps everything it already paid for.
+    """
     if not essays:
         raise ValueError("No essays provided to grade.")
  
@@ -204,6 +213,8 @@ def grade_essays(essays: List[Dict], model: str = DEFAULT_MODEL) -> List[Dict]:
             result["source_file"] = source
             result["format_label"] = essay.get("format_label", "")
             results.append(result)
+            if on_result is not None:
+                on_result(essay, result)
             continue
 
         print(f"  → Grading {idx}/{total} (candidate {candidate_number}, role {role})")
@@ -220,6 +231,8 @@ def grade_essays(essays: List[Dict], model: str = DEFAULT_MODEL) -> List[Dict]:
         result["source_file"] = essay.get("source_file", "")
         result["format_label"] = essay.get("format_label", "")
         results.append(result)
+        if on_result is not None:
+            on_result(essay, result)
  
     return results
  

@@ -6,11 +6,12 @@ Flow:  PDFs in input/essays/  →  Claude grading  →  plagiarism screen  →  
 from pathlib import Path
 
 from pdf_loader import load_essays
-from essay_grader import grade_essays, _load_grading_prompt
+from essay_grader import grade_essays, DEFAULT_MODEL, _load_grading_prompt
 from grading_cache import (
     load_cache,
     save_cache,
-    prompt_hash,
+    fingerprint,
+    record_grade,
     partition,
     merge_and_update,
 )
@@ -47,7 +48,9 @@ def run_pipeline() -> None:
     # Only new or changed essays are graded. If the rubric changed, the whole
     # cache is stale and everything is regraded (handled inside partition()).
     cache = load_cache(str(cache_file))
-    current_prompt_hash = prompt_hash(_load_grading_prompt())
+    # Fingerprint covers the rubric AND the model — a grade is only reusable
+    # when both are unchanged.
+    current_prompt_hash = fingerprint(_load_grading_prompt(), DEFAULT_MODEL)
     to_grade, reused = partition(essays, cache, current_prompt_hash)
     print(
         f"🗃️  Reusing {len(reused)} cached grade(s); "
@@ -56,7 +59,17 @@ def run_pipeline() -> None:
 
     if to_grade:
         print("📤 Sending essays to Claude...")
-        new_results = grade_essays(to_grade)
+
+        def _persist(essay: dict, result: dict) -> None:
+            """Save each grade the moment it lands.
+
+            A full cold run takes hours; without this, one rate-limit error
+            near the end would throw away every grade before it.
+            """
+            record_grade(cache, essay, result, current_prompt_hash)
+            save_cache(str(cache_file), cache)
+
+        new_results = grade_essays(to_grade, on_result=_persist)
     else:
         print("   ✓ Nothing to grade — all essays served from cache")
         new_results = []

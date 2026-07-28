@@ -11,9 +11,14 @@ Design notes:
     essay's text, so plagiarism can still compare against a candidate whose PDF
     was later removed from the folder, and the report is always rebuilt from the
     full merged set.
-  - A hash of the grading prompt (`config/essay_prompt.txt`) is stored too. If
-    the rubric changes, every cached grade is stale and the whole cache is
-    discarded so everything is regraded — grades must never silently mix rubrics.
+  - A fingerprint of the grading prompt (`config/essay_prompt.txt`) AND the
+    model is stored too (in `prompt_sha256`). If either changes, every cached
+    grade is stale and the whole cache is discarded so everything is regraded —
+    grades must never silently mix rubrics or models. One hiring report should
+    never contain some candidates judged by a weaker model than others.
+  - Grades are written one at a time as they complete (`record_grade`), not in
+    one batch at the end, so an interrupted run keeps everything it finished.
+    A full cold run takes hours; losing it to a rate limit is not acceptable.
   - Cache entries are keyed by (candidate_number, role): a candidate may
     legitimately apply for more than one role, exactly as pdf_loader dedups.
 """
@@ -31,6 +36,15 @@ from typing import Dict, List, Tuple
 def prompt_hash(prompt_text: str) -> str:
     """sha256 of the grading prompt. Any rubric edit changes this."""
     return hashlib.sha256(prompt_text.encode("utf-8")).hexdigest()
+
+
+def fingerprint(prompt_text: str, model: str) -> str:
+    """sha256 of the grading prompt plus the model that graded with it.
+
+    Stored in the cache's `prompt_sha256` field. Keyed on both because a grade
+    is only reusable when the rubric AND the model behind it are unchanged.
+    """
+    return hashlib.sha256(f"{model}\n{prompt_text}".encode("utf-8")).hexdigest()
 
 
 def essay_hash(essay_text: str) -> str:
@@ -81,6 +95,32 @@ def save_cache(path: str, cache: Dict) -> None:
     tmp = cache_file.with_suffix(cache_file.suffix + ".tmp")
     tmp.write_text(json.dumps(cache, ensure_ascii=False, indent=2), encoding="utf-8")
     os.replace(tmp, cache_file)
+
+
+def _entry(essay: Dict, result: Dict) -> Dict:
+    """The stored shape of one cached grade."""
+    return {
+        "candidate_number": essay["candidate_number"],
+        "role": essay["role"],
+        "source_file": essay.get("source_file", ""),
+        "essay_sha256": essay_hash(essay["essay_text"]),
+        "essay_text": essay["essay_text"],
+        "result": result,
+    }
+
+
+def record_grade(
+    cache: Dict, essay: Dict, result: Dict, current_prompt_hash: str
+) -> None:
+    """Records one freshly graded essay so it survives an interrupted run.
+
+    The caller saves the cache afterwards; `save_cache` is atomic, so being
+    killed mid-write cannot corrupt what was already stored.
+    """
+    cache["prompt_sha256"] = current_prompt_hash
+    cache["candidates"][_cache_key(essay["candidate_number"], essay["role"])] = _entry(
+        essay, result
+    )
 
 
 # ============================================================
@@ -162,14 +202,7 @@ def merge_and_update(
         if "format_label" in essay:
             result = {**result, "format_label": essay["format_label"]}
 
-        candidates[key] = {
-            "candidate_number": essay["candidate_number"],
-            "role": essay["role"],
-            "source_file": essay.get("source_file", ""),
-            "essay_sha256": essay_hash(essay["essay_text"]),
-            "essay_text": essay["essay_text"],
-            "result": result,
-        }
+        candidates[key] = _entry(essay, result)
 
     folder_keys = [
         _cache_key(e["candidate_number"], e["role"]) for e in essays
