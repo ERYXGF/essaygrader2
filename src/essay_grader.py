@@ -354,9 +354,43 @@ def _error_result(candidate_number: str, role: str, reason: str) -> Dict:
     }
  
  
+def _normalise_question_assessments(raw) -> List[Dict]:
+    """Coerces question_number to int and sorts assessments into canonical order.
+
+    The prompt asks for the canonical question number (identified from the
+    answer's content, not its position in the document), but the model is free
+    to emit "1", 1.0, or nothing at all. Normalising here — the one point every
+    result passes through — means the report and any later analysis can key on
+    question_number without re-parsing it.
+
+    Entries with no usable number keep their original relative order and sort
+    last, so a legacy or malformed result still renders positionally rather
+    than disappearing. Anything that isn't a list of dicts becomes [].
+    """
+    if not isinstance(raw, list):
+        return []
+
+    assessments = []
+    for entry in raw:
+        if not isinstance(entry, dict):
+            continue
+        entry = dict(entry)
+        try:
+            entry["question_number"] = int(entry["question_number"])
+        except (KeyError, TypeError, ValueError):
+            entry["question_number"] = None
+        assessments.append(entry)
+
+    # Stable sort: unnumbered entries sort last, ties keep emission order.
+    return sorted(
+        assessments,
+        key=lambda a: (a["question_number"] is None, a["question_number"] or 0),
+    )
+
+
 def _normalise_result(result: Dict, candidate_number: str, role: str) -> Dict:
     """Ensures every expected key is present in the result dict.
- 
+
     Note: we always set 'candidate_number' from our own parameter rather than
     trusting whatever Claude returned in the response. The candidate number is
     authoritative on our side; Claude's job is to grade, not to identify.
@@ -372,10 +406,12 @@ def _normalise_result(result: Dict, candidate_number: str, role: str) -> Dict:
         "writing_quality": result.get("writing_quality", {}),
         "ai_usage_probability": result.get("ai_usage_probability", "unknown"),
         "ai_usage_indicators": result.get("ai_usage_indicators", ""),
-        "question_assessments": result.get("question_assessments", []),
+        "question_assessments": _normalise_question_assessments(
+            result.get("question_assessments", [])
+        ),
     }
- 
- 
+
+
 def _extract_first_json_object(text: str) -> str:
     """Finds and returns the first balanced JSON object in text.
  

@@ -6,7 +6,11 @@ The report has up to three sheets:
                three feedback columns (Human Override / Override Reason /
                Reviewed) ready for the eventual RAG phase, and a Plagiarism Flag
                column (colour-coded, empty when clean).
-- Detailed   : strengths, weaknesses, rationale, AI indicators, Q1 summary.
+- Detailed   : strengths, weaknesses, rationale, AI indicators, and one
+               summary column per question. The Q1/Q2/Q3 columns are filled by
+               canonical question_number, not by position in the list, so a
+               candidate who answered out of sequence still lines up with
+               everyone else.
 - Similarity : one row per flagged essay pair with the full plagiarism evidence
                (only written when similarity_pairs is provided).
 """
@@ -144,6 +148,8 @@ def write_report(
         "Rationale",
         "AI Indicators",
         "Q1 Summary",
+        "Q2 Summary",
+        "Q3 Summary",
     ]
 
     for col, h in enumerate(detail_headers, 1):
@@ -153,7 +159,7 @@ def write_report(
     for row_idx, r in enumerate(results, start=2):
         strengths = r.get("strengths", []) or []
         weaknesses = r.get("weaknesses", []) or []
-        q_assessments = r.get("question_assessments", []) or []
+        summaries = _question_summaries(r.get("question_assessments", []) or [])
 
         values = [
             r.get("candidate_number", "Unknown"),
@@ -162,11 +168,15 @@ def write_report(
             ", ".join(weaknesses),
             r.get("rationale", ""),
             r.get("ai_usage_indicators", ""),
-            q_assessments[0].get("summary", "") if q_assessments else "",
+            summaries.get(1, ""),
+            summaries.get(2, ""),
+            summaries.get(3, ""),
         ]
 
         for col, val in enumerate(values, 1):
-            ws2.cell(row=row_idx, column=col, value=val)
+            cell = ws2.cell(row=row_idx, column=col, value=val)
+            if col >= 3:  # every long-form column
+                cell.alignment = Alignment(vertical="top", wrap_text=True)
 
     _autosize(ws2, max_width=60)
 
@@ -180,6 +190,50 @@ def write_report(
     # SAVE
     # =========================
     wb.save(output_file)
+
+
+def _question_summaries(assessments: List[Dict]) -> Dict[int, str]:
+    """Maps canonical question number -> summary text.
+
+    Candidates answer the questions in whatever order they like, so the model
+    is asked to identify each answer by content and report the canonical
+    question number. Keying on that number — rather than on position in the
+    list — is what keeps the Q1 column meaning the same question on every row.
+
+    Results graded before question numbers were canonical (and any where the
+    model omitted the field) carry no usable number, so those fall back to
+    list order. TFO submissions have only two questions and simply leave Q3
+    empty.
+    """
+    summaries: Dict[int, str] = {}
+    unnumbered = []
+
+    for entry in assessments:
+        if not isinstance(entry, dict):
+            continue
+        number = entry.get("question_number")
+        # A number we can't read is treated as absent, not as an error.
+        try:
+            number = int(number)
+        except (TypeError, ValueError):
+            number = None
+
+        if number is None:
+            unnumbered.append(entry)
+        elif number in (1, 2, 3):
+            summaries.setdefault(number, entry.get("summary", "") or "")
+        # An out-of-range number (Q9, Q0) is a claim we can't honour. Drop it
+        # rather than guessing a column — a blank cell is recoverable, the
+        # wrong answer under the Q1 header is the bug this mapping exists to
+        # prevent.
+
+    # Fall back to position only for the columns nothing claimed by number.
+    for position, entry in enumerate(unnumbered, start=1):
+        if position > 3:
+            break
+        summaries.setdefault(position, entry.get("summary", "") or "")
+
+    return summaries
 
 
 def _write_similarity_sheet(

@@ -23,7 +23,9 @@ version with anonymisation, see `../essaygrader/`.
 5. Writes a three-sheet Excel report to `output/final_report.xlsx`
    - **Summary**: one row per candidate, classification colour-coded, plus a
      colour-coded `Plagiarism Flag` column (empty when clean)
-   - **Detailed**: strengths, weaknesses, rationale, AI risk indicators
+   - **Detailed**: strengths, weaknesses, rationale, AI risk indicators, and a
+     summary column per question (Q1/Q2/Q3), keyed by canonical question number
+     so a candidate who answered out of sequence still lines up with the rest
    - **Similarity**: one row per flagged essay pair with similarity scores,
      Claude's verdict and quoted shared evidence
 
