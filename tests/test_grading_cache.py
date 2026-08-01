@@ -282,13 +282,18 @@ class TestClassify(unittest.TestCase):
     def test_grade_reasons_cover_exactly_the_costly_ones(self):
         self.assertEqual(
             set(gc.GRADE_REASONS),
-            {gc.REASON_NEW, gc.REASON_CHANGED, gc.REASON_STALE_RUBRIC},
+            {
+                gc.REASON_NEW,
+                gc.REASON_CHANGED,
+                gc.REASON_REEXTRACTED,
+                gc.REASON_STALE_RUBRIC,
+            },
         )
 
     def test_every_reason_has_a_label(self):
         for reason in (
-            gc.REASON_NEW, gc.REASON_CHANGED, gc.REASON_STALE_RUBRIC,
-            gc.REASON_CURRENT, gc.REASON_OUT_OF_SCOPE,
+            gc.REASON_NEW, gc.REASON_CHANGED, gc.REASON_REEXTRACTED,
+            gc.REASON_STALE_RUBRIC, gc.REASON_CURRENT, gc.REASON_OUT_OF_SCOPE,
         ):
             self.assertIn(reason, gc.REASON_LABELS)
 
@@ -311,6 +316,129 @@ class TestClassify(unittest.TestCase):
                     expected = [e for e, r in classified if r in gc.GRADE_REASONS]
                     self.assertEqual(to_grade, expected)
                     self.assertEqual(len(to_grade) + len(reused), len(essays))
+
+
+# ------------------------------------------------------------
+# File identity: an extractor change must not look like a resubmission
+# ------------------------------------------------------------
+def _file_essay(number, role, text, file_hash):
+    essay = _essay(number, role, text)
+    essay["file_sha256"] = file_hash
+    return essay
+
+
+class TestFileIdentity(unittest.TestCase):
+    """The submission is identified by its bytes, not by what we read out."""
+
+    def _seed(self, essays, prompt=None):
+        cache = gc._empty_cache()
+        graded = [(e, _result(e["candidate_number"], e["role"])) for e in essays]
+        gc.merge_and_update(
+            cache, essays, graded, gc.prompt_hash(prompt or PROMPT_A), "v1.0"
+        )
+        return cache
+
+    def _reason(self, essay, cache, prompt=None):
+        classified = gc.classify(
+            [essay], cache, gc.prompt_hash(prompt or PROMPT_A)
+        )
+        return classified[0][1]
+
+    def test_same_file_read_differently_is_not_a_regrade(self):
+        """The whole fix: an extractor change costs nothing."""
+        cache = self._seed([_file_essay("1", "LTC", "prac\x10cal", "FILE-A")])
+        reread = _file_essay("1", "LTC", "practical", "FILE-A")  # same file
+        self.assertEqual(self._reason(reread, cache), gc.REASON_CURRENT)
+
+    def test_different_file_is_a_resubmission(self):
+        cache = self._seed([_file_essay("1", "LTC", "aaa", "FILE-A")])
+        resubmitted = _file_essay("1", "LTC", "aaa", "FILE-A-V2")
+        self.assertEqual(self._reason(resubmitted, cache), gc.REASON_CHANGED)
+
+    def test_identical_file_and_text_is_current(self):
+        cache = self._seed([_file_essay("1", "LTC", "aaa", "FILE-A")])
+        self.assertEqual(
+            self._reason(_file_essay("1", "LTC", "aaa", "FILE-A"), cache),
+            gc.REASON_CURRENT,
+        )
+
+    def test_bumping_the_extractor_version_forces_a_reread(self):
+        """The deliberate key still works."""
+        cache = self._seed([_file_essay("1", "LTC", "aaa", "FILE-A")])
+        cache["candidates"]["1|LTC"]["extractor_version"] = "0"  # graded by an older one
+        self.assertEqual(
+            self._reason(_file_essay("1", "LTC", "aaa", "FILE-A"), cache),
+            gc.REASON_REEXTRACTED,
+        )
+
+    def test_resubmission_beats_a_version_bump(self):
+        """A changed file is reported as a resubmission, not a re-extraction."""
+        cache = self._seed([_file_essay("1", "LTC", "aaa", "FILE-A")])
+        cache["candidates"]["1|LTC"]["extractor_version"] = "0"
+        self.assertEqual(
+            self._reason(_file_essay("1", "LTC", "aaa", "FILE-B"), cache),
+            gc.REASON_CHANGED,
+        )
+
+    def test_legacy_entry_without_a_file_hash_falls_back_to_text(self):
+        """Upgrading must not invalidate a single existing grade."""
+        cache = self._seed([_essay("1", "LTC", "aaa")])  # no file_sha256
+        cache["candidates"]["1|LTC"].pop("file_sha256", None)
+
+        unchanged = _essay("1", "LTC", "aaa")
+        self.assertEqual(self._reason(unchanged, cache), gc.REASON_CURRENT)
+        edited = _essay("1", "LTC", "aaa EDITED")
+        self.assertEqual(self._reason(edited, cache), gc.REASON_CHANGED)
+
+    def test_unreadable_file_hash_falls_back_to_text(self):
+        cache = self._seed([_file_essay("1", "LTC", "aaa", "FILE-A")])
+        unreadable = _file_essay("1", "LTC", "aaa", "")  # hashing failed
+        self.assertEqual(self._reason(unreadable, cache), gc.REASON_CURRENT)
+
+    def test_entry_records_both_new_fields(self):
+        cache = self._seed([_file_essay("1", "LTC", "aaa", "FILE-A")])
+        entry = cache["candidates"]["1|LTC"]
+        self.assertEqual(entry["file_sha256"], "FILE-A")
+        self.assertEqual(entry["extractor_version"], gc.EXTRACTOR_VERSION)
+
+
+class TestStaleExtractions(unittest.TestCase):
+    """Reusing a grade built from different text must not be silent."""
+
+    def _seed(self, essays):
+        cache = gc._empty_cache()
+        graded = [(e, _result(e["candidate_number"], e["role"])) for e in essays]
+        gc.merge_and_update(cache, essays, graded, gc.prompt_hash(PROMPT_A), "v1.0")
+        return cache
+
+    def test_drift_without_a_version_bump_is_reported(self):
+        cache = self._seed([_file_essay("1", "LTC", "aaa", "FILE-A")])
+        reread = [_file_essay("1", "LTC", "aaa read differently", "FILE-A")]
+        drifted = gc.stale_extractions(reread, cache)
+        self.assertEqual([e["candidate_number"] for e in drifted], ["1"])
+
+    def test_no_drift_when_text_is_identical(self):
+        cache = self._seed([_file_essay("1", "LTC", "aaa", "FILE-A")])
+        same = [_file_essay("1", "LTC", "aaa", "FILE-A")]
+        self.assertEqual(gc.stale_extractions(same, cache), [])
+
+    def test_resubmissions_are_not_reported_as_drift(self):
+        """Already regrading — warning about it too would be noise."""
+        cache = self._seed([_file_essay("1", "LTC", "aaa", "FILE-A")])
+        resubmitted = [_file_essay("1", "LTC", "totally new", "FILE-B")]
+        self.assertEqual(gc.stale_extractions(resubmitted, cache), [])
+
+    def test_deliberate_reextraction_is_not_reported_as_drift(self):
+        cache = self._seed([_file_essay("1", "LTC", "aaa", "FILE-A")])
+        cache["candidates"]["1|LTC"]["extractor_version"] = "0"
+        reread = [_file_essay("1", "LTC", "aaa better", "FILE-A")]
+        self.assertEqual(gc.stale_extractions(reread, cache), [])
+
+    def test_unknown_candidate_is_ignored(self):
+        self.assertEqual(
+            gc.stale_extractions([_file_essay("9", "TRI", "x", "F")], gc._empty_cache()),
+            [],
+        )
 
 
 # ------------------------------------------------------------

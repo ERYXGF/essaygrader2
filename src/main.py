@@ -28,6 +28,7 @@ from grading_cache import (
     partition,
     merge_and_update,
     stale_keys,
+    stale_extractions,
     GRADE_REASONS,
     REASON_CHANGED,
     REASON_LABELS,
@@ -65,23 +66,45 @@ def _report_dry_run(
         if reason not in GRADE_REASONS and count:
             print(f"      {count:4d}  {REASON_LABELS[reason]}")
 
-    # The reason this command exists: changed text is the one trigger that is
-    # easy to cause by accident (an extractor edit re-reads every PDF) and it
-    # deliberately bypasses --roles, so name the candidates rather than just
-    # counting them.
+    # Resubmissions bypass --roles, so name them rather than just counting.
     changed = [e for e, r in classified if r == REASON_CHANGED]
     if changed:
         print()
         print(
-            f"   ⚠ {len(changed)} essay(s) will regrade because their extracted "
-            f"text changed — a resubmission, or an extractor change re-reading "
-            f"the same file. This ignores --roles:"
+            f"   ⚠ {len(changed)} candidate(s) submitted a different file since "
+            f"their last grade. This ignores --roles:"
         )
         for essay in changed:
             print(f"      {essay['candidate_number']}|{essay['role']}")
 
+    _warn_stale_extractions(essays, cache)
+
     print()
     print(f"   → {would_grade} API call(s) if run for real. Nothing was spent.")
+
+
+def _warn_stale_extractions(essays: list, cache: dict) -> None:
+    """Warns when extraction drifted but EXTRACTOR_VERSION was not bumped.
+
+    Grades are keyed on the file, so this costs nothing — which is the point.
+    But it means the stored grades were produced from different text than we
+    read today, and staying silent about that would trade a cost surprise for
+    a correctness one.
+    """
+    drifted = stale_extractions(essays, cache)
+    if not drifted:
+        return
+    print()
+    print(
+        f"   ⚠ {len(drifted)} file(s) now extract differently than when they "
+        f"were graded, but EXTRACTOR_VERSION was not bumped, so their grades "
+        f"will NOT refresh. Bump it in text_extractors.py if the new "
+        f"extraction is better:"
+    )
+    for essay in drifted[:10]:
+        print(f"      {essay['candidate_number']}|{essay['role']}")
+    if len(drifted) > 10:
+        print(f"      ... and {len(drifted) - 10} more")
 
 
 def run_pipeline(roles: Optional[Set[str]] = None, dry_run: bool = False) -> None:
@@ -131,6 +154,7 @@ def run_pipeline(roles: Optional[Set[str]] = None, dry_run: bool = False) -> Non
         f"🗃️  Reusing {len(reused)} cached grade(s); "
         f"grading {len(to_grade)} new/changed essay(s)"
     )
+    _warn_stale_extractions(essays, cache)
     if roles is not None:
         # A scoped run must say plainly what it left behind, or a reviewer has
         # no way to know the report mixes rubrics.

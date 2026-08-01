@@ -24,11 +24,12 @@ import main
 import grading_cache as gc
 
 
-def _essay(number, role, text):
+def _essay(number, role, text, file_hash=""):
     return {
         "candidate_number": number,
         "role": role,
         "essay_text": text,
+        "file_sha256": file_hash,
         "source_file": f"{number}_{role}_assignment.pdf",
     }
 
@@ -77,21 +78,42 @@ class TestDryRun(unittest.TestCase):
         self.assertIn("new submission", output)
         self.assertIn("Would grade 1", output)
 
-    def test_changed_text_is_named_not_just_counted(self):
-        """Changed text is the trap this command exists to surface."""
+    def test_resubmission_is_named_not_just_counted(self):
+        """A candidate sending a different file bypasses --roles, so name them."""
         cache = gc._empty_cache()
-        original = [_essay("1", "LTC", "aaa"), _essay("2", "TRI", "bbb")]
+        original = [
+            _essay("1", "LTC", "aaa", file_hash="FILE-A"),
+            _essay("2", "TRI", "bbb", file_hash="FILE-B"),
+        ]
         graded = [(e, {"candidate_number": e["candidate_number"]}) for e in original]
         gc.merge_and_update(cache, original, graded, "HASH", "v1.0")
 
-        edited = [_essay("1", "LTC", "aaa REEXTRACTED"), _essay("2", "TRI", "bbb")]
-        with mock.patch.object(gc, "fingerprint", return_value="HASH"), \
-             mock.patch.object(main, "fingerprint", return_value="HASH"):
-            output = self._run(edited, cache_data=cache)
+        resubmitted = [
+            _essay("1", "LTC", "different essay", file_hash="FILE-A-V2"),
+            _essay("2", "TRI", "bbb", file_hash="FILE-B"),
+        ]
+        with mock.patch.object(main, "fingerprint", return_value="HASH"):
+            output = self._run(resubmitted, cache_data=cache)
 
-        self.assertIn("text changed since last grade", output)
+        self.assertIn("resubmitted", output)
         self.assertIn("1|LTC", output)
         self.assertIn("ignores --roles", output)
+
+    def test_extraction_drift_warns_but_costs_nothing(self):
+        """Same file, changed extraction, no version bump: reuse but say so."""
+        cache = gc._empty_cache()
+        original = [_essay("1", "LTC", "aaa", file_hash="FILE-A")]
+        graded = [(original[0], {"candidate_number": "1"})]
+        gc.merge_and_update(cache, original, graded, "HASH", "v1.0")
+
+        # Same file, but our extractor now reads it differently.
+        redread = [_essay("1", "LTC", "aaa read differently", file_hash="FILE-A")]
+        with mock.patch.object(main, "fingerprint", return_value="HASH"):
+            output = self._run(redread, cache_data=cache)
+
+        self.assertIn("Would grade 0", output)          # costs nothing
+        self.assertIn("will NOT refresh", output)       # but is not silent
+        self.assertIn("1|LTC", output)
 
     def test_scope_is_reported(self):
         output = self._run([_essay("1", "TRI", "bbb")], roles={"TRI"})

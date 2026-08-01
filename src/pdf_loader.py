@@ -17,6 +17,7 @@ and the candidate must resubmit as a PDF. Only files we cannot read at all
 go ungraded.
 """
 
+import hashlib
 import re
 from pathlib import Path
 from typing import List, Dict, Tuple
@@ -61,6 +62,8 @@ def load_essays(folder_path: str) -> List[Dict]:
         - candidate_number: str (e.g. "12345")
         - role: str (one of "LTC", "TFO", "TRI")
         - essay_text: str (extracted text; "" only when unreadable)
+        - file_sha256: str (hash of the raw file bytes — the submission's
+          identity for caching; "" if the file could not be read)
         - source_file: str (original filename, useful for error messages)
         - file_format: str (one of the text_extractors FORMAT_* values)
         - wrong_format: bool (True whenever the file is not a PDF)
@@ -161,12 +164,32 @@ def _record(
         "candidate_number": candidate_number,
         "role": role,
         "essay_text": essay_text,
+        "file_sha256": _file_hash(path),
         "source_file": path.name,
         "file_format": file_format,
         "wrong_format": wrong_format,
         "format_label": label,
         "format_reason": reason,
     }
+
+
+def _file_hash(path: Path) -> str:
+    """sha256 of the submission's raw bytes.
+
+    This is the submission's identity. Hashing the *file* rather than the text
+    we read out of it is what lets the grading cache tell "the candidate
+    resubmitted" apart from "we changed how PDFs are read" — see
+    grading_cache.classify(). Returns '' if the file cannot be read, which
+    falls the caller back to comparing extracted text.
+    """
+    digest = hashlib.sha256()
+    try:
+        with open(path, "rb") as fh:
+            for chunk in iter(lambda: fh.read(65536), b""):
+                digest.update(chunk)
+    except OSError:
+        return ""
+    return digest.hexdigest()
 
 
 def _parse_filename(filename: str) -> Tuple[str, str]:

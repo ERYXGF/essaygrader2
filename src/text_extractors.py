@@ -29,6 +29,17 @@ import ocr
 # ============================================================
 # CONFIG
 # ============================================================
+# Bump this ONLY when a change here should refresh existing grades — i.e. when
+# the text we hand the grader is deliberately better or different for files
+# that have not themselves changed. Adding the OCR fallback warranted a bump;
+# a refactor, a comment, or a new error message does not.
+#
+# Grades are keyed on the submission's file bytes, so incidental changes to
+# extraction cost nothing. This constant is the deliberate override — the only
+# way to say "re-read every file and regrade what differs". Bumping it will
+# regrade the whole corpus, so run --dry-run first.
+EXTRACTOR_VERSION = "1"
+
 # Heuristic for "this PDF is probably scanned/image-based".
 # A PDF over this size that yields under this many characters is suspicious.
 SCANNED_PDF_SIZE_THRESHOLD = 50_000  # bytes

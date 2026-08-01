@@ -35,6 +35,8 @@ import os
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
+from text_extractors import EXTRACTOR_VERSION
+
 
 # ============================================================
 # HASHING
@@ -90,18 +92,25 @@ def _cache_key(candidate_number: str, role: str) -> str:
 # Why an essay will or won't be graded this run. Reported by --dry-run so the
 # cost of a run is visible before it is incurred.
 REASON_NEW = "new"                       # no cache entry
-REASON_CHANGED = "changed"               # extracted text differs from the cached grade
+REASON_CHANGED = "changed"               # the submitted file itself differs
+REASON_REEXTRACTED = "reextracted"       # same file, EXTRACTOR_VERSION bumped
 REASON_STALE_RUBRIC = "stale_rubric"     # graded under an older rubric/model
 REASON_CURRENT = "current"               # already graded under this rubric
 REASON_OUT_OF_SCOPE = "out_of_scope"     # stale, but its role isn't in this run
 
 # The reasons that cost an API call.
-GRADE_REASONS = (REASON_NEW, REASON_CHANGED, REASON_STALE_RUBRIC)
+GRADE_REASONS = (
+    REASON_NEW,
+    REASON_CHANGED,
+    REASON_REEXTRACTED,
+    REASON_STALE_RUBRIC,
+)
 
 # Human-readable labels for the dry-run report.
 REASON_LABELS = {
     REASON_NEW: "new submission",
-    REASON_CHANGED: "text changed since last grade",
+    REASON_CHANGED: "candidate resubmitted (file changed)",
+    REASON_REEXTRACTED: "extractor upgraded (same file, re-read)",
     REASON_STALE_RUBRIC: "older rubric",
     REASON_CURRENT: "already current",
     REASON_OUT_OF_SCOPE: "older rubric, role not in scope",
@@ -166,7 +175,11 @@ def _entry(
         "candidate_number": essay["candidate_number"],
         "role": essay["role"],
         "source_file": essay.get("source_file", ""),
+        # The submission's identity: the file itself. essay_sha256 is kept
+        # alongside it as a tripwire for extraction drift, not as a key.
+        "file_sha256": essay.get("file_sha256", ""),
         "essay_sha256": essay_hash(essay["essay_text"]),
+        "extractor_version": EXTRACTOR_VERSION,
         "essay_text": essay["essay_text"],
         "prompt_sha256": prompt_sha256,
         "rubric_version": version,
@@ -216,21 +229,27 @@ def classify(
     rather than repeating the rules, so a `--dry-run` report can never disagree
     with what a real run would actually do.
 
+    A submission's identity is its **file bytes**, not the text we read out of
+    it. That distinction is the whole point: if the PDF is unchanged then the
+    candidate did not resubmit, however our extraction code may have changed in
+    the meantime. Re-reading files is instead opted into deliberately by bumping
+    text_extractors.EXTRACTOR_VERSION.
+
     Reasons:
 
       REASON_NEW           no cache entry at all
-      REASON_CHANGED       cached, but the extracted text no longer matches —
-                           the candidate resubmitted, or we changed how the
-                           file is read. The cache cannot tell those apart.
+      REASON_CHANGED       the submitted file itself differs — a resubmission
+      REASON_REEXTRACTED   same file, but EXTRACTOR_VERSION was bumped, so we
+                           deliberately want it re-read and regraded
       REASON_STALE_RUBRIC  valid grade under an older rubric/model, role in scope
       REASON_CURRENT       valid grade under the current rubric — reuse
       REASON_OUT_OF_SCOPE  stale grade whose role is excluded this run — reuse
 
-    `roles` scopes *regrading*, never new work. NEW and CHANGED are decided
-    before the role filter is consulted: neither has a usable grade to keep, and
-    skipping an out-of-scope one would leave a hole in the report. Only
-    STALE_RUBRIC is gated by scope. roles=None means every stale grade is in
-    scope, which is the whole-corpus behaviour.
+    `roles` scopes *regrading*, never new work. NEW, CHANGED and REEXTRACTED are
+    decided before the role filter is consulted: none has a usable grade to
+    keep, and skipping an out-of-scope one would leave a hole in the report.
+    Only STALE_RUBRIC is gated by scope. roles=None means every stale grade is
+    in scope, which is the whole-corpus behaviour.
     """
     candidates = cache["candidates"]
     classified: List[Tuple[Dict, str]] = []
@@ -240,8 +259,10 @@ def classify(
 
         if not entry:
             reason = REASON_NEW
-        elif entry.get("essay_sha256") != essay_hash(essay["essay_text"]):
+        elif _file_changed(entry, essay):
             reason = REASON_CHANGED
+        elif entry.get("extractor_version", EXTRACTOR_VERSION) != EXTRACTOR_VERSION:
+            reason = REASON_REEXTRACTED
         elif entry.get("prompt_sha256") == current_prompt_hash:
             reason = REASON_CURRENT
         elif roles is None or essay["role"] in roles:
@@ -252,6 +273,48 @@ def classify(
         classified.append((essay, reason))
 
     return classified
+
+
+def _file_changed(entry: Dict, essay: Dict) -> bool:
+    """True when the candidate submitted a different file.
+
+    Compares raw file bytes where both sides have them. Entries written before
+    the file hash existed, and files we could not read, fall back to comparing
+    extracted text — the old behaviour, so no cache is invalidated by the
+    upgrade itself.
+    """
+    cached_file = entry.get("file_sha256")
+    current_file = essay.get("file_sha256")
+    if cached_file and current_file:
+        return cached_file != current_file
+    return entry.get("essay_sha256") != essay_hash(essay.get("essay_text", ""))
+
+
+def stale_extractions(essays: List[Dict], cache: Dict) -> List[Dict]:
+    """Essays whose extracted text drifted without EXTRACTOR_VERSION changing.
+
+    The file is the same and the extractor version is the same, yet the text
+    differs from what produced the cached grade — so extraction behaviour
+    changed and nobody bumped the version. Those grades are still reused (that
+    is the point of keying on the file), but they were derived from different
+    text, so the run must say so rather than pass silently.
+
+    This is what keeps `essay_sha256` earning its place: it is no longer an
+    identity key, it is the tripwire for exactly this mistake.
+    """
+    candidates = cache.get("candidates", {})
+    drifted = []
+    for essay in essays:
+        entry = candidates.get(_cache_key(essay["candidate_number"], essay["role"]))
+        if not entry:
+            continue
+        if _file_changed(entry, essay):
+            continue  # a real resubmission, already regrading
+        if entry.get("extractor_version", EXTRACTOR_VERSION) != EXTRACTOR_VERSION:
+            continue  # deliberate re-extraction, already regrading
+        if entry.get("essay_sha256") != essay_hash(essay.get("essay_text", "")):
+            drifted.append(essay)
+    return drifted
 
 
 def partition(
