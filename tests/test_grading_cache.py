@@ -224,6 +224,96 @@ class TestRoleScopedPartition(unittest.TestCase):
 
 
 # ------------------------------------------------------------
+# classify() — the reasons behind partition()'s split
+# ------------------------------------------------------------
+class TestClassify(unittest.TestCase):
+    def _seed_cache(self, essays, prompt):
+        cache = gc._empty_cache()
+        graded = [(e, _result(e["candidate_number"], e["role"])) for e in essays]
+        gc.merge_and_update(cache, essays, graded, gc.prompt_hash(prompt), "v1.0")
+        return cache
+
+    def _reasons(self, essays, cache, prompt, roles=None):
+        return [r for _, r in gc.classify(essays, cache, gc.prompt_hash(prompt), roles)]
+
+    def test_each_reason_is_produced(self):
+        seeded = [_essay("1", "LTC", "aaa"), _essay("2", "TRI", "bbb")]
+        cache = self._seed_cache(seeded, PROMPT_A)
+        essays = [
+            _essay("1", "LTC", "aaa"),           # unchanged, stale rubric, out of scope
+            _essay("2", "TRI", "bbb"),           # unchanged, stale rubric, in scope
+            _essay("3", "TRI", "brand new"),     # never seen
+            _essay("1", "TRI", "different role"),  # new: role makes a distinct key
+        ]
+        self.assertEqual(
+            self._reasons(essays, cache, PROMPT_B, roles={"TRI"}),
+            [
+                gc.REASON_OUT_OF_SCOPE,
+                gc.REASON_STALE_RUBRIC,
+                gc.REASON_NEW,
+                gc.REASON_NEW,
+            ],
+        )
+
+    def test_changed_text_is_distinguished_from_new(self):
+        cache = self._seed_cache([_essay("1", "LTC", "aaa")], PROMPT_A)
+        essays = [_essay("1", "LTC", "aaa EDITED"), _essay("9", "LTC", "unseen")]
+        self.assertEqual(
+            self._reasons(essays, cache, PROMPT_A),
+            [gc.REASON_CHANGED, gc.REASON_NEW],
+        )
+
+    def test_changed_text_ignores_role_scope(self):
+        """An extractor change must not be hidden by --roles."""
+        cache = self._seed_cache([_essay("1", "LTC", "aaa")], PROMPT_A)
+        essays = [_essay("1", "LTC", "aaa REEXTRACTED")]
+        self.assertEqual(
+            self._reasons(essays, cache, PROMPT_A, roles={"TRI"}),
+            [gc.REASON_CHANGED],
+        )
+
+    def test_current_grades_are_reported_as_current(self):
+        cache = self._seed_cache([_essay("1", "LTC", "aaa")], PROMPT_A)
+        self.assertEqual(
+            self._reasons([_essay("1", "LTC", "aaa")], cache, PROMPT_A),
+            [gc.REASON_CURRENT],
+        )
+
+    def test_grade_reasons_cover_exactly_the_costly_ones(self):
+        self.assertEqual(
+            set(gc.GRADE_REASONS),
+            {gc.REASON_NEW, gc.REASON_CHANGED, gc.REASON_STALE_RUBRIC},
+        )
+
+    def test_every_reason_has_a_label(self):
+        for reason in (
+            gc.REASON_NEW, gc.REASON_CHANGED, gc.REASON_STALE_RUBRIC,
+            gc.REASON_CURRENT, gc.REASON_OUT_OF_SCOPE,
+        ):
+            self.assertIn(reason, gc.REASON_LABELS)
+
+    def test_agrees_with_partition_across_every_case(self):
+        """The dry run is worthless if it can disagree with a real run."""
+        cache = self._seed_cache(
+            [_essay("1", "LTC", "aaa"), _essay("2", "TRI", "bbb")], PROMPT_A
+        )
+        essays = [
+            _essay("1", "LTC", "aaa"),
+            _essay("2", "TRI", "bbb EDITED"),
+            _essay("3", "TRI", "new one"),
+        ]
+        for prompt in (PROMPT_A, PROMPT_B):
+            for roles in (None, {"TRI"}, {"LTC"}, {"TRI", "LTC"}):
+                with self.subTest(prompt=prompt, roles=roles):
+                    h = gc.prompt_hash(prompt)
+                    to_grade, reused = gc.partition(essays, cache, h, roles)
+                    classified = gc.classify(essays, cache, h, roles)
+                    expected = [e for e, r in classified if r in gc.GRADE_REASONS]
+                    self.assertEqual(to_grade, expected)
+                    self.assertEqual(len(to_grade) + len(reused), len(essays))
+
+
+# ------------------------------------------------------------
 # Rubric version parsing / legacy cache migration
 # ------------------------------------------------------------
 class TestRubricVersion(unittest.TestCase):

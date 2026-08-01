@@ -85,6 +85,30 @@ def _cache_key(candidate_number: str, role: str) -> str:
 
 
 # ============================================================
+# CLASSIFICATION REASONS
+# ============================================================
+# Why an essay will or won't be graded this run. Reported by --dry-run so the
+# cost of a run is visible before it is incurred.
+REASON_NEW = "new"                       # no cache entry
+REASON_CHANGED = "changed"               # extracted text differs from the cached grade
+REASON_STALE_RUBRIC = "stale_rubric"     # graded under an older rubric/model
+REASON_CURRENT = "current"               # already graded under this rubric
+REASON_OUT_OF_SCOPE = "out_of_scope"     # stale, but its role isn't in this run
+
+# The reasons that cost an API call.
+GRADE_REASONS = (REASON_NEW, REASON_CHANGED, REASON_STALE_RUBRIC)
+
+# Human-readable labels for the dry-run report.
+REASON_LABELS = {
+    REASON_NEW: "new submission",
+    REASON_CHANGED: "text changed since last grade",
+    REASON_STALE_RUBRIC: "older rubric",
+    REASON_CURRENT: "already current",
+    REASON_OUT_OF_SCOPE: "older rubric, role not in scope",
+}
+
+
+# ============================================================
 # LOAD / SAVE
 # ============================================================
 def _empty_cache() -> Dict:
@@ -180,6 +204,56 @@ def stale_keys(cache: Dict, current_prompt_hash: str) -> List[str]:
     ]
 
 
+def classify(
+    essays: List[Dict],
+    cache: Dict,
+    current_prompt_hash: str,
+    roles: Optional[Set[str]] = None,
+) -> List[Tuple[Dict, str]]:
+    """Decides what happens to each essay, and why, in folder order.
+
+    This is the single source of truth for reuse. `partition()` is built on it
+    rather than repeating the rules, so a `--dry-run` report can never disagree
+    with what a real run would actually do.
+
+    Reasons:
+
+      REASON_NEW           no cache entry at all
+      REASON_CHANGED       cached, but the extracted text no longer matches —
+                           the candidate resubmitted, or we changed how the
+                           file is read. The cache cannot tell those apart.
+      REASON_STALE_RUBRIC  valid grade under an older rubric/model, role in scope
+      REASON_CURRENT       valid grade under the current rubric — reuse
+      REASON_OUT_OF_SCOPE  stale grade whose role is excluded this run — reuse
+
+    `roles` scopes *regrading*, never new work. NEW and CHANGED are decided
+    before the role filter is consulted: neither has a usable grade to keep, and
+    skipping an out-of-scope one would leave a hole in the report. Only
+    STALE_RUBRIC is gated by scope. roles=None means every stale grade is in
+    scope, which is the whole-corpus behaviour.
+    """
+    candidates = cache["candidates"]
+    classified: List[Tuple[Dict, str]] = []
+
+    for essay in essays:
+        entry = candidates.get(_cache_key(essay["candidate_number"], essay["role"]))
+
+        if not entry:
+            reason = REASON_NEW
+        elif entry.get("essay_sha256") != essay_hash(essay["essay_text"]):
+            reason = REASON_CHANGED
+        elif entry.get("prompt_sha256") == current_prompt_hash:
+            reason = REASON_CURRENT
+        elif roles is None or essay["role"] in roles:
+            reason = REASON_STALE_RUBRIC
+        else:
+            reason = REASON_OUT_OF_SCOPE
+
+        classified.append((essay, reason))
+
+    return classified
+
+
 def partition(
     essays: List[Dict],
     cache: Dict,
@@ -188,41 +262,20 @@ def partition(
 ) -> Tuple[List[Dict], List[Dict]]:
     """Splits the loaded essays into (to_grade, reused_results).
 
-    An essay is reused when a cache entry exists for its (candidate, role), the
-    essay text hash matches, AND the entry was graded under the current rubric
-    and model.
-
-    `roles` scopes *regrading*, never new work:
-
-      - An essay with no cache entry, or whose text has changed, is **always**
-        graded whatever its role. It has no usable grade, and skipping a new
-        out-of-scope submission would leave a hole in the report. This is the
-        incremental path and the role filter must never suppress it.
-      - An essay whose grade is stale only because the rubric or model changed
-        is regraded only when its role is in `roles`. Otherwise its existing
-        grade is reused as-is, keeping the hash it was graded under.
-
-    Passing roles=None (the default) means every stale grade is in scope, which
-    is the original whole-corpus behaviour.
+    A thin view over `classify()` — see there for the rules. Both lists stay in
+    folder order, which callers rely on: main.py zips `to_grade` against the
+    grading results, so the two must remain aligned.
     """
     candidates = cache["candidates"]
     to_grade: List[Dict] = []
     reused: List[Dict] = []
 
-    for essay in essays:
-        key = _cache_key(essay["candidate_number"], essay["role"])
-        entry = candidates.get(key)
-
-        if not entry or entry.get("essay_sha256") != essay_hash(essay["essay_text"]):
-            to_grade.append(essay)  # new or edited — always graded
-            continue
-
-        if entry.get("prompt_sha256") == current_prompt_hash:
-            reused.append(entry["result"])  # current, nothing to do
-        elif roles is None or essay["role"] in roles:
-            to_grade.append(essay)  # stale and in scope — regrade
+    for essay, reason in classify(essays, cache, current_prompt_hash, roles):
+        if reason in GRADE_REASONS:
+            to_grade.append(essay)
         else:
-            reused.append(entry["result"])  # stale but out of scope this run
+            key = _cache_key(essay["candidate_number"], essay["role"])
+            reused.append(candidates[key]["result"])
 
     return to_grade, reused
 

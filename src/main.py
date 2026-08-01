@@ -4,7 +4,12 @@ Flow:  PDFs in input/essays/  →  Claude grading  →  plagiarism screen  →  
 
 Run `python src/main.py` to process everything, or scope a rubric-driven
 regrade to particular roles with `--roles TRI`. New and edited submissions are
-always graded regardless of the scope — see grading_cache.partition().
+always graded regardless of the scope — see grading_cache.classify().
+
+`--dry-run` reports what would be graded, and why, without spending anything.
+Worth doing before any rubric *or extractor* change: reuse is keyed on a hash
+of the extracted text, so changing how a PDF is read invalidates grades exactly
+as a rubric edit does.
 """
 
 import argparse
@@ -19,15 +24,67 @@ from grading_cache import (
     fingerprint,
     rubric_version,
     record_grade,
+    classify,
     partition,
     merge_and_update,
     stale_keys,
+    GRADE_REASONS,
+    REASON_CHANGED,
+    REASON_LABELS,
 )
 from plagiarism_checker import check_plagiarism, apply_plagiarism_overrides
 from report_writer import write_report
 
 
-def run_pipeline(roles: Optional[Set[str]] = None) -> None:
+def _report_dry_run(
+    essays: list, cache: dict, current_prompt_hash: str, version: str, roles
+) -> None:
+    """Prints what a real run would grade, and why, without grading anything.
+
+    Reads the same classify() the real run uses, so the report cannot drift
+    from what would actually happen.
+    """
+    from collections import Counter
+
+    classified = classify(essays, cache, current_prompt_hash, roles)
+    counts = Counter(reason for _, reason in classified)
+    would_grade = sum(counts[r] for r in GRADE_REASONS)
+
+    print()
+    print("🔎 Dry run — nothing will be graded, no API calls made")
+    print(f"   Rubric: {version or '(unversioned)'}")
+    if roles is not None:
+        print(f"   Regrade scoped to: {', '.join(sorted(roles))}")
+    print()
+    print(f"   Would grade {would_grade}:")
+    for reason in GRADE_REASONS:
+        if counts[reason]:
+            print(f"      {counts[reason]:4d}  {REASON_LABELS[reason]}")
+    print(f"   Would reuse {len(classified) - would_grade}:")
+    for reason, count in counts.items():
+        if reason not in GRADE_REASONS and count:
+            print(f"      {count:4d}  {REASON_LABELS[reason]}")
+
+    # The reason this command exists: changed text is the one trigger that is
+    # easy to cause by accident (an extractor edit re-reads every PDF) and it
+    # deliberately bypasses --roles, so name the candidates rather than just
+    # counting them.
+    changed = [e for e, r in classified if r == REASON_CHANGED]
+    if changed:
+        print()
+        print(
+            f"   ⚠ {len(changed)} essay(s) will regrade because their extracted "
+            f"text changed — a resubmission, or an extractor change re-reading "
+            f"the same file. This ignores --roles:"
+        )
+        for essay in changed:
+            print(f"      {essay['candidate_number']}|{essay['role']}")
+
+    print()
+    print(f"   → {would_grade} API call(s) if run for real. Nothing was spent.")
+
+
+def run_pipeline(roles: Optional[Set[str]] = None, dry_run: bool = False) -> None:
     # ============================================================
     # PATHS  (project root = parent of src/)
     # ============================================================
@@ -61,6 +118,14 @@ def run_pipeline(roles: Optional[Set[str]] = None) -> None:
     prompt_text = _load_grading_prompt()
     current_prompt_hash = fingerprint(prompt_text, DEFAULT_MODEL)
     version = rubric_version(prompt_text)
+
+    # Return before grade_essays — the only place spend occurs. Essays are
+    # still loaded above, because extraction is what produces the hashes the
+    # report is about.
+    if dry_run:
+        _report_dry_run(essays, cache, current_prompt_hash, version, roles)
+        return
+
     to_grade, reused = partition(essays, cache, current_prompt_hash, roles)
     print(
         f"🗃️  Reusing {len(reused)} cached grade(s); "
@@ -139,6 +204,15 @@ def _parse_args(argv=None) -> argparse.Namespace:
             "whatever their role. Omit to regrade every stale grade."
         ),
     )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help=(
+            "Report what would be graded and why, then exit without calling "
+            "the API. Use before any rubric or extractor change to see what it "
+            "will cost."
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -149,4 +223,4 @@ if __name__ == "__main__":
         if args.roles
         else None
     )
-    run_pipeline(roles=selected)
+    run_pipeline(roles=selected, dry_run=args.dry_run)
