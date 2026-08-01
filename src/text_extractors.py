@@ -8,6 +8,10 @@ We read those alternative formats rather than rejecting them: the candidate's
 answers are perfectly gradeable, and it is only the container that is wrong.
 The caller still flags the submission so the reviewer knows the interviewers
 cannot open it and the candidate must resubmit as a PDF.
+
+PDFs whose text layer is missing (graphic or scanned submissions) or damaged
+(unmapped ligature glyphs) fall back to OCR — see ocr.py. The embedded text
+is preferred wherever it is sound, because it is the candidate's exact words.
 """
 
 import re
@@ -19,6 +23,8 @@ from typing import List, Tuple
 
 import pdfplumber
 
+import ocr
+
 
 # ============================================================
 # CONFIG
@@ -27,6 +33,17 @@ import pdfplumber
 # A PDF over this size that yields under this many characters is suspicious.
 SCANNED_PDF_SIZE_THRESHOLD = 50_000  # bytes
 SCANNED_PDF_TEXT_THRESHOLD = 100     # characters
+
+# Control characters that are not legitimate whitespace. Their presence means
+# the PDF's font never declared a ToUnicode mapping for some glyphs — usually
+# ligatures, so 'practical' arrives as 'prac\x10cal'. The text renders fine in
+# a viewer and is unreadable to us, which is why this is worth OCR.
+_BROKEN_GLYPH = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
+
+# Above this share of damaged characters, the embedded text is not worth
+# grading on its own and OCR is attempted. Set low deliberately: even 1% of
+# glyphs missing scatters unreadable words through every paragraph.
+BROKEN_GLYPH_RATIO = 0.001
 
 # Word/Pages extraction is heuristic. Anything shorter than this is treated
 # as a failed extraction rather than graded as if it were a real answer.
@@ -127,8 +144,22 @@ def extract_text(path: Path) -> Tuple[str, str]:
 # ============================================================
 # PER-FORMAT EXTRACTION
 # ============================================================
+def broken_glyph_ratio(text: str) -> float:
+    """Share of characters that are unmapped font glyphs rather than text."""
+    if not text:
+        return 0.0
+    return len(_BROKEN_GLYPH.findall(text)) / len(text)
+
+
 def _extract_pdf(pdf_path: Path) -> str:
-    """Extracts all text from a PDF. Raises if the result is suspiciously empty."""
+    """Extracts all text from a PDF, falling back to OCR when needed.
+
+    The embedded text layer is preferred: it is the candidate's exact words,
+    with no recognition error. OCR is attempted only when that layer is
+    missing (a graphic or scanned submission) or damaged (unmapped ligature
+    glyphs), and the result is used only when it is genuinely cleaner — see
+    _better_text().
+    """
     try:
         with pdfplumber.open(pdf_path) as pdf:
             pages = [page.extract_text() or "" for page in pdf.pages]
@@ -139,23 +170,57 @@ def _extract_pdf(pdf_path: Path) -> str:
 
     text = "\n\n".join(pages).strip()
 
-    # Sanity check: a 50KB+ PDF that yields almost no text is almost
-    # certainly scanned/image-based. Refuse rather than send nonsense
-    # to Claude.
+    # A 50KB+ PDF yielding almost no text is a graphic or scanned submission.
     file_size = pdf_path.stat().st_size
-    if file_size > SCANNED_PDF_SIZE_THRESHOLD and len(text) < SCANNED_PDF_TEXT_THRESHOLD:
-        raise UnreadableSubmission(
-            f"'{pdf_path.name}' yielded only {len(text)} characters of text "
-            f"despite being {file_size:,} bytes. It is probably scanned or "
-            f"image-based; OCR is not currently supported."
-        )
+    looks_scanned = (
+        file_size > SCANNED_PDF_SIZE_THRESHOLD
+        and len(text) < SCANNED_PDF_TEXT_THRESHOLD
+    )
+
+    if looks_scanned or broken_glyph_ratio(text) > BROKEN_GLYPH_RATIO:
+        recognised = ocr.ocr_pdf(pdf_path)
+        if recognised:
+            text = _better_text(text, recognised)
 
     if not text:
         raise UnreadableSubmission(
-            f"'{pdf_path.name}' contains no extractable text."
+            f"'{pdf_path.name}' contains no extractable text"
+            + (
+                "" if ocr.is_available()
+                else " and OCR is unavailable on this machine"
+            )
+            + "."
+        )
+
+    if looks_scanned and len(text) < SCANNED_PDF_TEXT_THRESHOLD:
+        raise UnreadableSubmission(
+            f"'{pdf_path.name}' yielded only {len(text)} characters of text "
+            f"despite being {file_size:,} bytes. It is probably scanned or "
+            f"image-based, and OCR could not recover it either."
         )
 
     return text
+
+
+def _better_text(embedded: str, recognised: str) -> str:
+    """Chooses between the PDF's own text and the OCR transcription.
+
+    Neither source is reliably better. The embedded layer is the candidate's
+    literal words but may be riddled with unmapped glyphs; OCR is always
+    mapped but invents its own misreadings on dense or graphical layouts.
+
+    The rule: prefer OCR only when the embedded text is actually damaged and
+    OCR recovered a comparable amount of text. The length guard matters —
+    OCR that captures a third of the page has lost answers, and losing whole
+    answers is far worse for grading than a scatter of broken words.
+    """
+    if not embedded:
+        return recognised
+    if broken_glyph_ratio(embedded) <= BROKEN_GLYPH_RATIO:
+        return embedded  # nothing wrong with it — never trade it for OCR
+    if len(recognised) < 0.6 * len(embedded):
+        return embedded  # OCR dropped too much of the page
+    return recognised
 
 
 def _extract_docx(path: Path) -> str:

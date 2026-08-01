@@ -9,3 +9,12 @@ openpyxl==3.1.5
  
 # Extracts text from candidate-submitted PDF essays.
 pdfplumber==0.11.9
+
+# Renders PDF pages to images for the OCR fallback (see src/ocr.py), used when
+# a submission is graphic/scanned or its font ligature glyphs are unmapped.
+pypdfium2==5.9.0
+
+# macOS Vision text recognition, the OCR engine itself. Optional and macOS-only:
+# src/ocr.py degrades to the PDF's embedded text if this cannot be imported, so
+# the pipeline still runs on other platforms.
+pyobjc-framework-Vision==12.2.1; sys_platform == "darwin"
