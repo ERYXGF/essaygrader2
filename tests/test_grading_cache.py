@@ -72,7 +72,10 @@ class TestLoadSave(unittest.TestCase):
     def test_save_then_load_round_trips(self):
         with tempfile.TemporaryDirectory() as d:
             path = str(Path(d) / "cache.json")
-            cache = {"prompt_sha256": "abc", "candidates": {"1|LTC": {"x": 1}}}
+            cache = {
+                "prompt_sha256": "abc",
+                "candidates": {"1|LTC": {"x": 1, "prompt_sha256": "abc"}},
+            }
             gc.save_cache(path, cache)
             self.assertEqual(gc.load_cache(path), cache)
 
@@ -96,6 +99,7 @@ class TestPartition(unittest.TestCase):
         return cache
 
     def test_stale_prompt_regrades_everything(self):
+        """Unscoped run: a rubric change makes every cached grade stale."""
         essays = [_essay("1", "LTC", "aaa"), _essay("2", "TRI", "bbb")]
         cache = self._seed_cache(essays, PROMPT_A)
         to_grade, reused = gc.partition(essays, cache, gc.prompt_hash(PROMPT_B))
@@ -131,6 +135,142 @@ class TestPartition(unittest.TestCase):
         to_grade, reused = gc.partition(essays, cache, gc.prompt_hash(PROMPT_A))
         self.assertEqual([e["role"] for e in to_grade], ["TRI"])
         self.assertEqual(len(reused), 1)
+
+
+# ------------------------------------------------------------
+# Role-scoped regrading
+#
+# The rule under test throughout: `roles` scopes REGRADING, never new work.
+# ------------------------------------------------------------
+class TestRoleScopedPartition(unittest.TestCase):
+    def _seed_cache(self, essays, prompt):
+        cache = gc._empty_cache()
+        graded = [(e, _result(e["candidate_number"], e["role"])) for e in essays]
+        gc.merge_and_update(cache, essays, graded, gc.prompt_hash(prompt), "v1.0")
+        return cache
+
+    def test_only_scoped_roles_are_regraded_when_rubric_changes(self):
+        essays = [_essay("1", "LTC", "aaa"), _essay("2", "TRI", "bbb")]
+        cache = self._seed_cache(essays, PROMPT_A)
+        to_grade, reused = gc.partition(
+            essays, cache, gc.prompt_hash(PROMPT_B), roles={"TRI"}
+        )
+        self.assertEqual([e["role"] for e in to_grade], ["TRI"])
+        self.assertEqual(len(reused), 1)  # the stale LTC grade is kept as-is
+
+    def test_new_essay_is_graded_even_when_its_role_is_out_of_scope(self):
+        """The incremental path must never be suppressed by the role filter.
+
+        A brand-new LTC submission has no grade at all; skipping it during a
+        TRI-scoped run would silently drop it from the report.
+        """
+        cache = self._seed_cache([_essay("1", "TRI", "bbb")], PROMPT_A)
+        essays = [_essay("1", "TRI", "bbb"), _essay("2", "LTC", "brand new")]
+        to_grade, _ = gc.partition(
+            essays, cache, gc.prompt_hash(PROMPT_A), roles={"TRI"}
+        )
+        self.assertEqual([e["candidate_number"] for e in to_grade], ["2"])
+
+    def test_edited_essay_is_regraded_even_when_out_of_scope(self):
+        cache = self._seed_cache([_essay("1", "LTC", "aaa")], PROMPT_A)
+        edited = [_essay("1", "LTC", "aaa CHANGED")]
+        to_grade, _ = gc.partition(
+            edited, cache, gc.prompt_hash(PROMPT_A), roles={"TRI"}
+        )
+        self.assertEqual(len(to_grade), 1)
+
+    def test_unchanged_prompt_grades_nothing_whatever_the_scope(self):
+        essays = [_essay("1", "LTC", "aaa"), _essay("2", "TRI", "bbb")]
+        cache = self._seed_cache(essays, PROMPT_A)
+        to_grade, reused = gc.partition(
+            essays, cache, gc.prompt_hash(PROMPT_A), roles={"TRI"}
+        )
+        self.assertEqual(to_grade, [])
+        self.assertEqual(len(reused), 2)
+
+    def test_out_of_scope_entries_stay_stale_after_merge(self):
+        """A scoped run must not promote untouched rows to the new rubric."""
+        essays = [_essay("1", "LTC", "aaa"), _essay("2", "TRI", "bbb")]
+        cache = self._seed_cache(essays, PROMPT_A)
+        new_hash = gc.prompt_hash(PROMPT_B)
+
+        tri = _essay("2", "TRI", "bbb")
+        gc.merge_and_update(
+            cache, essays, [(tri, _result("2", "TRI"))], new_hash, "v2.0"
+        )
+
+        self.assertEqual(cache["candidates"]["2|TRI"]["prompt_sha256"], new_hash)
+        self.assertEqual(cache["candidates"]["2|TRI"]["rubric_version"], "v2.0")
+        # The LTC row keeps the rubric it was actually graded under.
+        self.assertEqual(
+            cache["candidates"]["1|LTC"]["prompt_sha256"], gc.prompt_hash(PROMPT_A)
+        )
+        self.assertEqual(cache["candidates"]["1|LTC"]["rubric_version"], "v1.0")
+        self.assertEqual(gc.stale_keys(cache, new_hash), ["1|LTC"])
+
+    def test_results_carry_rubric_version_and_currency(self):
+        essays = [_essay("1", "LTC", "aaa"), _essay("2", "TRI", "bbb")]
+        cache = self._seed_cache(essays, PROMPT_A)
+        new_hash = gc.prompt_hash(PROMPT_B)
+        tri = _essay("2", "TRI", "bbb")
+        results, _ = gc.merge_and_update(
+            cache, essays, [(tri, _result("2", "TRI"))], new_hash, "v2.0"
+        )
+        by_number = {r["candidate_number"]: r for r in results}
+        self.assertTrue(by_number["2"]["rubric_is_current"])
+        self.assertEqual(by_number["2"]["rubric_version"], "v2.0")
+        self.assertFalse(by_number["1"]["rubric_is_current"])
+        self.assertEqual(by_number["1"]["rubric_version"], "v1.0")
+
+
+# ------------------------------------------------------------
+# Rubric version parsing / legacy cache migration
+# ------------------------------------------------------------
+class TestRubricVersion(unittest.TestCase):
+    def test_reads_version_token(self):
+        prompt = "# Title\n\n## Version\nv9.3 — August 2026 (Adds: things)\n\n---\n"
+        self.assertEqual(gc.rubric_version(prompt), "v9.3")
+
+    def test_skips_blank_line_after_heading(self):
+        prompt = "## Version\n\n\nv10.0 — later\n"
+        self.assertEqual(gc.rubric_version(prompt), "v10.0")
+
+    def test_missing_version_section_is_not_fatal(self):
+        self.assertEqual(gc.rubric_version("no version here"), "")
+        self.assertEqual(gc.rubric_version("## Version\n"), "")
+
+
+class TestLegacyCacheMigration(unittest.TestCase):
+    def test_entries_without_hashes_inherit_the_global_one(self):
+        """Pre-migration caches must stay reusable, not force a full regrade."""
+        import json
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "cache.json"
+            legacy = {
+                "prompt_sha256": gc.prompt_hash(PROMPT_A),
+                "candidates": {
+                    "1|LTC": {
+                        "candidate_number": "1",
+                        "role": "LTC",
+                        "source_file": "1_LTC_assignment.pdf",
+                        "essay_sha256": gc.essay_hash("aaa"),
+                        "essay_text": "aaa",
+                        "result": _result("1", "LTC"),
+                    }
+                },
+            }
+            path.write_text(json.dumps(legacy), encoding="utf-8")
+
+            cache = gc.load_cache(str(path))
+            self.assertEqual(
+                cache["candidates"]["1|LTC"]["prompt_sha256"], gc.prompt_hash(PROMPT_A)
+            )
+            to_grade, reused = gc.partition(
+                [_essay("1", "LTC", "aaa")], cache, gc.prompt_hash(PROMPT_A)
+            )
+            self.assertEqual(to_grade, [])
+            self.assertEqual(len(reused), 1)
 
 
 # ------------------------------------------------------------

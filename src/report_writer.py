@@ -3,6 +3,9 @@
 The report has up to three sheets:
 - Summary    : one row per candidate, headline grades, colour-coded classification,
                a File Format column flagging submissions that aren't PDFs,
+               a Rubric Version column (shaded when the row was graded under an
+               older rubric than this run, as happens after a role-scoped
+               regrade),
                three feedback columns (Human Override / Override Reason /
                Reviewed) ready for the eventual RAG phase, and a Plagiarism Flag
                column (colour-coded, empty when clean).
@@ -71,6 +74,7 @@ def write_report(
         "Writing Quality",
         "AI Risk",
         "File Format",
+        "Rubric Version",
         "Human Override",
         "Override Reason",
         "Reviewed",
@@ -96,6 +100,7 @@ def write_report(
             writing.get("rating", ""),
             r.get("ai_usage_probability", ""),
             r.get("format_label", ""),
+            r.get("rubric_version", ""),
             "",  # Human Override (blank — reviewer fills in)
             "",  # Override Reason
             "",  # Reviewed
@@ -111,6 +116,13 @@ def write_report(
         format_cell = ws1.cell(row=row_idx, column=summary_headers.index("File Format") + 1)
         if str(format_cell.value or "").startswith("wrong format"):
             format_cell.fill = yellow
+
+        # A role-scoped regrade leaves other roles on an older rubric. Mixing
+        # is acceptable, but it must be visible — a reviewer comparing two rows
+        # needs to know they were judged against different criteria.
+        rubric_cell = ws1.cell(row=row_idx, column=summary_headers.index("Rubric Version") + 1)
+        if r.get("rubric_is_current") is False:
+            rubric_cell.fill = yellow
 
         # Plagiarism flag: wrap (can hold one line per matched pair) and
         # colour-band by risk so flagged rows stand out at a glance.
