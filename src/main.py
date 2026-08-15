@@ -204,8 +204,16 @@ def _warn_stale_extractions(essays: list, cache: dict, campaign: str = "") -> No
         print(f"      ... and {len(drifted) - 10} more")
 
 
-NOT_CHECKED = "? embargo not checked — recruitment list missing"
-NOT_LISTED = "? not in recruitment list"
+# The Embargo column is a plain verdict so downstream automation can filter on
+# it without parsing prose; Embargo Detail carries the reasoning for humans.
+# Splitting them also retires the last place where a blank cell had to be read
+# as "checked and clear" — the verdict now says so in as many words.
+EMBARGO_YES = "YES"
+EMBARGO_NO = "NO"
+EMBARGO_UNKNOWN = "UNKNOWN"
+
+NOT_CHECKED = "recruitment list missing — embargo not checked"
+NOT_LISTED = "not in recruitment list"
 
 
 def _load_applications(list_path) -> Optional[list]:
@@ -330,7 +338,8 @@ def _apply_embargoes(results: list, campaign: str, applications: Optional[list])
     """
     if applications is None:
         for result in results:
-            result["embargo"] = NOT_CHECKED
+            result["embargo"] = EMBARGO_UNKNOWN
+            result["embargo_detail"] = NOT_CHECKED
         return
 
     embargoes = find_embargoes(applications, campaign)
@@ -340,12 +349,15 @@ def _apply_embargoes(results: list, campaign: str, applications: Optional[list])
     for result in results:
         number = str(result.get("candidate_number", ""))
         if number in embargoes:
-            result["embargo"] = describe_embargo(embargoes[number])
+            result["embargo"] = EMBARGO_YES
+            result["embargo_detail"] = describe_embargo(embargoes[number])
             flagged += 1
         elif number in listed:
-            result["embargo"] = ""  # checked and clear
+            result["embargo"] = EMBARGO_NO
+            result["embargo_detail"] = ""  # the verdict already says it
         else:
-            result["embargo"] = NOT_LISTED
+            result["embargo"] = EMBARGO_UNKNOWN
+            result["embargo_detail"] = NOT_LISTED
             unlisted += 1
 
     print(

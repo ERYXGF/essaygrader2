@@ -310,18 +310,35 @@ within six months of one in an **earlier campaign**.
 - **Reported, never enforced.** An embargoed candidate is still graded and still
   appears in the report. A human decides.
 
-The column has exactly four meanings, and a blank is one of them:
+It is reported in **two columns**: `Embargo` is a plain verdict for automation
+to filter on, and `Embargo Detail` carries the reasoning for a human.
 
-| Cell | Meaning |
+| `Embargo` | `Embargo Detail` |
 |---|---|
-| `⚠ Re-applied 76d (2.5 months) after FY26 application on …` | a measured breach |
-| *(blank)* | **checked, and clear** |
-| `? not in recruitment list` | candidate absent from the export |
-| `? embargo not checked — recruitment list missing` | no export was found |
+| `YES` | `⚠ Re-applied 88d (2.9 months) after FY26 application on 16 Jul 2026 (TRI) — interview: PENDING, approval: PENDING` |
+| `NO` | *(blank)* |
+| `UNKNOWN` | `not in recruitment list` |
+| `UNKNOWN` | `recruitment list missing — embargo not checked` |
 
-A blank never means "not checked" — that distinction is the whole point, since a
-blank cell in a workbook that circulates would otherwise read as a clean bill of
-health.
+No cell ever has to be read as "checked and clear" by being empty — `NO` says so
+outright, and `UNKNOWN` says the opposite just as plainly.
+
+### The prior outcome is shown, never acted on
+
+The detail line ends with the previous application's `INTERVIEW DECISION` and
+`FINAL APPROVAL`, so a reviewer can dismiss a rejected candidate's
+re-application in seconds.
+
+The embargo does **not** depend on those values, and deliberately so. In the
+current export **124 of 148 candidates have no recorded outcome** — `PENDING` or
+blank on both fields. A rule that only fired on `NO`/`REJECTED` would clear
+those 124 on re-application, not because they succeeded but because a field was
+never filled in. Flagging every prior applicant errs toward a reviewer glancing
+at a row they can dismiss, rather than toward a breach nobody sees.
+
+(For the record, should that ever change: in this data `FINAL APPROVAL =
+REJECTED` is a strict subset of `INTERVIEW DECISION = NO` — 15 of 18 — so "either"
+is just the decision field, and "both" is just the approval field.)
 
 Note that in a campaign's **first** year the column is blank for everyone, which
 is correct: there is no earlier campaign to measure six months against.

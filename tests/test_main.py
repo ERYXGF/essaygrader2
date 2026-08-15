@@ -286,7 +286,8 @@ class TestEmbargoWiring(unittest.TestCase):
             main._apply_embargoes(
                 results, "FY27", main._load_applications("/nonexistent/list.csv")
             )
-        self.assertTrue(all(r["embargo"] == main.NOT_CHECKED for r in results))
+        self.assertTrue(all(r["embargo"] == main.EMBARGO_UNKNOWN for r in results))
+        self.assertTrue(all(r["embargo_detail"] == main.NOT_CHECKED for r in results))
         self.assertIn("NOT checked", buffer.getvalue())
 
     def test_flags_a_reapplicant_and_clears_the_others(self):
@@ -300,8 +301,11 @@ class TestEmbargoWiring(unittest.TestCase):
             main._apply_embargoes(
                 results, "FY27", main._load_applications(path)
             )
-        self.assertTrue(results[0]["embargo"].startswith("⚠"))
-        self.assertEqual(results[1]["embargo"], "")
+        self.assertEqual(results[0]["embargo"], main.EMBARGO_YES)
+        self.assertTrue(results[0]["embargo_detail"].startswith("⚠"))
+        # A clear candidate says so outright rather than by an empty cell.
+        self.assertEqual(results[1]["embargo"], main.EMBARGO_NO)
+        self.assertEqual(results[1]["embargo_detail"], "")
 
     def test_a_candidate_absent_from_the_list_is_marked_unknown(self):
         path = self._list([("12/10/2026 08:30", "872524", "LTC")])
@@ -310,7 +314,8 @@ class TestEmbargoWiring(unittest.TestCase):
             main._apply_embargoes(
                 results, "FY27", main._load_applications(path)
             )
-        self.assertEqual(results[1]["embargo"], main.NOT_LISTED)
+        self.assertEqual(results[1]["embargo"], main.EMBARGO_UNKNOWN)
+        self.assertEqual(results[1]["embargo_detail"], main.NOT_LISTED)
 
     def test_nothing_is_removed_from_the_results(self):
         """Flag only: an embargoed candidate is still graded and still reported."""

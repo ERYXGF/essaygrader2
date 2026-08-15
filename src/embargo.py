@@ -111,15 +111,27 @@ def find_embargoes(
 
 
 def describe(embargo: Embargo) -> str:
-    """The report cell text for one embargo.
+    """The report detail text for one embargo.
 
-    Names the prior campaign, how long ago it was, and which role it was for,
-    because those are the three things a reviewer needs before overriding it.
+    Names the prior campaign, how long ago it was, which role it was for, and
+    what became of it — the four things a reviewer needs before overriding it.
+
+    The outcome is shown, never acted on. Most applications carry no decision
+    yet, so making the embargo *depend* on one would clear the majority of
+    re-applicants on the strength of an unfilled field. Showing it instead lets
+    a reviewer dismiss a rejected candidate's re-application in seconds, while
+    an unrecorded one still gets looked at.
+
+    Both values are printed as the List records them — PENDING and HOLD appear
+    as themselves, and an empty field is called out as unrecorded rather than
+    quietly rendered as a blank.
     """
     months = embargo.days_apart / 30.44
     role = embargo.prior.role or "unknown role"
     return (
         f"⚠ Re-applied {embargo.days_apart}d ({months:.1f} months) after "
         f"{embargo.prior_campaign} application on "
-        f"{embargo.prior.submitted_at.strftime('%d %b %Y')} ({role})"
+        f"{embargo.prior.submitted_at.strftime('%d %b %Y')} ({role}) — "
+        f"interview: {embargo.prior.interview_decision or 'not recorded'}, "
+        f"approval: {embargo.prior.final_approval or 'not recorded'}"
     )
