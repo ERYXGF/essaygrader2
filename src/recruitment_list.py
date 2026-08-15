@@ -14,13 +14,23 @@ document would look like an older applicant than they are. The List's `Created`
 column is the real submission timestamp, so it is the only trustworthy basis for
 a date-sensitive rule.
 
-Column matching
----------------
-The exported headers carry decorative emoji and inconsistent spacing (e.g.
-'🔴 INTERVIEW DECISION 🔴', '📧 INTERVIEW EMAIL SENT  📧'). Matching them
-literally would break the moment someone edits a column label in SharePoint, so
-headers are normalised — emoji and punctuation stripped, whitespace collapsed,
-lowercased — and looked up by that normalised form.
+Two export shapes, one loader
+-----------------------------
+The List can be exported two ways and both are in use, so both are read:
+
+  - The **friendly** export, whose headers are the display names, decorative
+    emoji and all ('🔴 INTERVIEW DECISION 🔴'), with UK dates ('01/04/2026 11:56').
+  - The **OData** export straight from SharePoint, whose headers are internal
+    names with escapes ('Staff_x0020_Number'), whose dates are ISO 8601 UTC
+    ('2026-06-04T13:26:07Z'), and whose choice fields arrive as JSON:
+    '{"@odata.type":"...","Id":2,"Value":"LTC"}'.
+
+Headers are therefore decoded (`_x0020_` → space) and then normalised — emoji
+and punctuation stripped, whitespace collapsed, lowercased — so both shapes
+resolve to the same key. Values are unwrapped from the JSON envelope where
+present. Matching on the normalised name rather than on column position also
+means the loader survives columns being added, removed or reordered, which the
+two exports already disagree about.
 
 Only `Created` and `Staff Number` are required. Everything else is optional and
 absent values become empty strings, so a List that gains or loses a workflow
@@ -29,6 +39,7 @@ column keeps loading.
 
 import csv
 import datetime as dt
+import json
 import re
 from pathlib import Path
 from typing import Dict, List, NamedTuple, Optional
@@ -36,11 +47,24 @@ from typing import Dict, List, NamedTuple, Optional
 BASE_DIR = Path(__file__).resolve().parent
 DEFAULT_LIST_FILE = BASE_DIR.parent / "input" / "recruitment_list.csv"
 
-# Dates arrive UK-style (dd/mm/yyyy), optionally with a time. '01/04/2026' is
-# 1 April, never 4 January — parsing it the American way would silently shift
-# submissions by up to eleven months and corrupt every embargo decision, so the
-# formats are pinned explicitly rather than left to a guessing parser.
-_DATE_FORMATS = ("%d/%m/%Y %H:%M:%S", "%d/%m/%Y %H:%M", "%d/%m/%Y")
+# The OData export uses ISO 8601 in UTC; the friendly export uses UK dates.
+# '01/04/2026' is 1 April, never 4 January — parsing it the American way would
+# shift a submission by nine months, which on its own is enough to clear a
+# six-month embargo. The formats are therefore pinned explicitly rather than
+# left to a guessing parser, and the day-first ones are tried first so an
+# ambiguous value can never be read month-first by accident.
+_DATE_FORMATS = (
+    "%Y-%m-%dT%H:%M:%SZ",
+    "%Y-%m-%dT%H:%M:%S",
+    "%Y-%m-%d",
+    "%d/%m/%Y %H:%M:%S",
+    "%d/%m/%Y %H:%M",
+    "%d/%m/%Y",
+)
+
+# SharePoint escapes characters it cannot use in an internal name as _xHHHH_,
+# with astral characters running to eight hex digits (_x0001f4e7_ is 📧).
+_SP_ESCAPE = re.compile(r"_x([0-9a-fA-F]{4,8})_")
 
 
 class Application(NamedTuple):
@@ -49,27 +73,68 @@ class Application(NamedTuple):
     staff_number: str
     submitted_at: dt.date
     role: str
-    outcome: str  # OUTCOME column: YES / NO / PENDING / '' — see note below.
+    outcome: str  # final decision where recorded: YES/NO/PENDING/APPROVED/...
     successful: str  # 'APPLICATION SUCCESSFUL' — the written-task sift result.
+    applied_before: str  # candidate's own answer: YES / NO / ''
+
+
+def _decode_sharepoint(name: str) -> str:
+    """Turns 'Staff_x0020_Number' back into 'Staff Number'."""
+    def replace(match):
+        try:
+            return chr(int(match.group(1), 16))
+        except (ValueError, OverflowError):
+            return " "
+    return _SP_ESCAPE.sub(replace, name or "")
 
 
 def _normalise_header(header: str) -> str:
     """Reduces an exported column label to a stable lookup key.
 
-    Strips the decorative emoji and any non-alphanumeric noise, collapses
-    whitespace and lowercases, so '🟣 APPLICATION SUCCESSFUL 🟣' and
-    'Application Successful' resolve to the same key.
+    Decodes SharePoint's escapes, then strips decorative emoji and any other
+    non-alphanumeric noise, collapses whitespace and lowercases — so
+    '🟣 APPLICATION SUCCESSFUL 🟣', 'APPLICATIONSUCCESSFUL' and
+    'Application Successful' all resolve to the same key.
     """
-    cleaned = re.sub(r"[^0-9a-zA-Z]+", " ", header or "")
+    cleaned = re.sub(r"[^0-9a-zA-Z]+", " ", _decode_sharepoint(header))
     return " ".join(cleaned.split()).lower()
 
 
-# Normalised header -> the field we want it for.
+def unwrap(value: str) -> str:
+    """Extracts the useful text from a SharePoint choice field.
+
+    The OData export renders a choice as
+    '{"@odata.type":"...","Id":2,"Value":"LTC"}'. Anything that is not such an
+    envelope is returned unchanged, so the friendly export passes straight
+    through.
+    """
+    value = (value or "").strip()
+    if not value.startswith("{"):
+        return value
+    try:
+        decoded = json.loads(value)
+    except (ValueError, TypeError):
+        return value
+    if isinstance(decoded, dict) and "Value" in decoded:
+        return str(decoded["Value"] or "").strip()
+    return value
+
+
+# Lookup keys: the normalised header with spaces removed, which is what makes
+# 'APPLICATION SUCCESSFUL' and 'APPLICATIONSUCCESSFUL' the same column.
 _CREATED = "created"
-_STAFF_NUMBER = "staff number"
-_ROLE = "position applied for"
-_OUTCOME = "outcome"
-_SUCCESSFUL = "application successful"
+_STAFF_NUMBER = "staffnumber"
+_ROLE = "positionappliedfor"
+_SUCCESSFUL = "applicationsuccessful"
+_APPLIED_BEFORE = "haveyouapplied"
+
+# Readable names for the error message, since the lookup keys are squashed.
+_COLUMN_LABELS = {_CREATED: "Created", _STAFF_NUMBER: "Staff Number"}
+
+# The final decision lives under a different label in each export, and under
+# more than one in the OData one. Tried in order of finality: an approval
+# outcome beats an interview decision, which beats the generic column.
+_OUTCOME_COLUMNS = ("finalapproval", "decision", "outcome")
 
 REQUIRED_COLUMNS = (_CREATED, _STAFF_NUMBER)
 
@@ -126,27 +191,67 @@ def load_report(path: Optional[Path] = None):
         except StopIteration:
             raise ValueError(f"'{list_file}' is empty — no header row.")
 
-        index = {_normalise_header(h): i for i, h in enumerate(headers)}
-        missing = [c for c in REQUIRED_COLUMNS if c not in index]
+        # Keys are the normalised header with spaces removed, so the friendly
+        # export's 'APPLICATION SUCCESSFUL' and the OData export's
+        # 'APPLICATIONSUCCESSFUL' land on the same key. First occurrence wins:
+        # 'Position applied for' must beat its trailing 'Position applied
+        # for#Id' companion, which normalises to a longer, distinct key anyway.
+        index: Dict[str, int] = {}
+        for position, header in enumerate(headers):
+            index.setdefault(_normalise_header(header).replace(" ", ""), position)
+
+        def locate(key: str) -> Optional[int]:
+            """Column position for a key: exact match, else a unique prefix.
+
+            SharePoint truncates internal names to 32 characters, sometimes
+            mid-escape ('Have_x0020_you_x0020_applied_x00'), so an exact match
+            is not always possible. A prefix is accepted only when exactly one
+            header starts with it — an ambiguous prefix (`created` against both
+            'Created' and 'Created By') must never silently pick one.
+            """
+            if key in index:
+                return index[key]
+            matches = [h for h in index if h.startswith(key)]
+            # The OData export pairs each choice column with companions
+            # ('...#Id', '...#Claims'), which share its prefix and would
+            # otherwise make every prefix ambiguous. Drop them first.
+            real = [h for h in matches if not h.endswith(("id", "claims", "odatatype"))]
+            candidates = real or matches
+            if not candidates:
+                return None
+            # Shortest wins: the plain column is always a prefix of its
+            # decorated siblings. Still refuse a genuine tie between two
+            # different columns of equal length.
+            candidates.sort(key=len)
+            if len(candidates) > 1 and len(candidates[0]) == len(candidates[1]):
+                return None
+            return index[candidates[0]]
+
+        positions = {key: locate(key) for key in
+                     (_CREATED, _STAFF_NUMBER, _ROLE, _SUCCESSFUL, _APPLIED_BEFORE)}
+        missing = [c for c in REQUIRED_COLUMNS if positions.get(c) is None]
         if missing:
             raise ValueError(
                 f"'{list_file}' is missing required column(s): "
-                f"{', '.join(missing)}. Found: {', '.join(headers)}"
+                f"{', '.join(_COLUMN_LABELS.get(c, c) for c in missing)}. "
+                f"Found: {', '.join(headers[:20])}"
             )
+        outcome_position = next(
+            (p for p in (locate(c) for c in _OUTCOME_COLUMNS) if p is not None), None
+        )
 
-        def field(row: List[str], key: str) -> str:
-            position = index.get(key)
+        def field(row: List[str], position: Optional[int]) -> str:
             if position is None or position >= len(row):
                 return ""
-            return (row[position] or "").strip()
+            return unwrap(row[position])
 
         applications: List[Application] = []
         skipped = 0
         for row in reader:
             if not any((cell or "").strip() for cell in row):
                 continue  # trailing blank line
-            staff_number = field(row, _STAFF_NUMBER)
-            submitted_at = parse_date(field(row, _CREATED))
+            staff_number = field(row, positions[_STAFF_NUMBER])
+            submitted_at = parse_date(field(row, positions[_CREATED]))
             if not staff_number or submitted_at is None:
                 skipped += 1
                 continue
@@ -154,9 +259,10 @@ def load_report(path: Optional[Path] = None):
                 Application(
                     staff_number=staff_number,
                     submitted_at=submitted_at,
-                    role=field(row, _ROLE),
-                    outcome=field(row, _OUTCOME).upper(),
-                    successful=field(row, _SUCCESSFUL).upper(),
+                    role=field(row, positions[_ROLE]),
+                    outcome=field(row, outcome_position).upper(),
+                    successful=field(row, positions[_SUCCESSFUL]).upper(),
+                    applied_before=field(row, positions[_APPLIED_BEFORE]).upper(),
                 )
             )
 

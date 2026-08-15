@@ -47,8 +47,34 @@ def _row(created, staff, role="TRI", successful="", outcome=""):
     return f"{created},someone,a@b.com,{staff},A Name,LGW,{role},{successful},{outcome}"
 
 
-def _app(staff, date, role="TRI", outcome=""):
-    return rl.Application(staff, date, role, outcome, "")
+def _app(staff, date, role="TRI", outcome="", applied_before=""):
+    return rl.Application(staff, date, role, outcome, "", applied_before)
+
+
+# The OData export straight from SharePoint: internal header names with
+# _xHHHH_ escapes, ISO 8601 dates, and choice fields wrapped in JSON.
+ODATA_HEADERS = (
+    "@odata.etag,ID,Title,Created,Staff_x0020_Number,Name,"
+    "Position_x0020_applied_x0020_for,Position_x0020_applied_x0020_for#Id,"
+    "Have_x0020_you_x0020_applied_x00,Have_x0020_you_x0020_applied_x00#Id,"
+    "APPLICATIONSUCCESSFUL,FINALAPPROVAL"
+)
+
+
+def _choice(value, ident=0):
+    inner = (
+        '{""@odata.type"":""#Microsoft.Azure.Connectors.SharePoint.'
+        'SPListExpandedReference"",""Id"":%d,""Value"":""%s""}' % (ident, value)
+    )
+    return f'"{inner}"'
+
+
+def _odata_row(created, staff, role="TRI", applied_before="NO"):
+    return ",".join([
+        "etag", "1", "Title", created, staff, "A Name",
+        _choice(role), "2", _choice(applied_before), "1",
+        _choice("YES"), _choice("PENDING"),
+    ])
 
 
 def _date(text):
@@ -104,11 +130,46 @@ class TestLoadApplications(unittest.TestCase):
         path = _csv([], headers="Created,Name,OUTCOME")
         with self.assertRaises(ValueError) as caught:
             rl.load_applications(path)
-        self.assertIn("staff number", str(caught.exception))
+        self.assertIn("staff number", str(caught.exception).lower())
 
     def test_missing_file_raises_file_not_found(self):
         with self.assertRaises(FileNotFoundError):
             rl.load_applications(Path("/nonexistent/list.csv"))
+
+    def test_reads_the_odata_export_shape(self):
+        """SharePoint's own export: escaped headers, ISO dates, JSON values."""
+        path = _csv(
+            [_odata_row("2026-06-04T13:26:07Z", "860775", "LTC", "YES")],
+            headers=ODATA_HEADERS,
+        )
+        apps = rl.load_applications(path)
+        self.assertEqual(len(apps), 1)
+        self.assertEqual(apps[0].staff_number, "860775")
+        self.assertEqual(apps[0].submitted_at, _date("2026-06-04"))
+        self.assertEqual(apps[0].role, "LTC")           # unwrapped from JSON
+        self.assertEqual(apps[0].applied_before, "YES")  # truncated header
+        self.assertEqual(apps[0].outcome, "PENDING")     # FINALAPPROVAL
+
+    def test_a_companion_id_column_does_not_shadow_its_real_column(self):
+        """'Position applied for#Id' shares a prefix with the column we want."""
+        path = _csv(
+            [_odata_row("2026-06-04T13:26:07Z", "1", "TRI")], headers=ODATA_HEADERS
+        )
+        self.assertEqual(rl.load_applications(path)[0].role, "TRI")
+
+    def test_created_is_not_confused_with_created_by(self):
+        """Both start with 'created'; only an exact match may win."""
+        path = _csv(
+            [_row("28/07/2026 09:00", "1")],
+            headers="Created,Created By,Email,Staff Number,Name,BASE,"
+                    "Position applied for,OUTCOME,X",
+        )
+        self.assertEqual(rl.load_applications(path)[0].submitted_at, _date("2026-07-28"))
+
+    def test_unwrap_leaves_plain_values_alone(self):
+        self.assertEqual(rl.unwrap("LTC"), "LTC")
+        self.assertEqual(rl.unwrap(""), "")
+        self.assertEqual(rl.unwrap("{not json"), "{not json")
 
     def test_applications_come_back_oldest_first(self):
         path = _csv([
@@ -221,6 +282,35 @@ class TestFindEmbargoes(unittest.TestCase):
         ]
         found = eb.find_embargoes(apps, "FY27")
         self.assertEqual(found["100"].days_apart, 1)
+
+
+class TestUnverifiable(unittest.TestCase):
+    """A candidate whose earlier application predates the List cannot be
+    cleared — 77 of the 148 FY26 candidates are in exactly this position."""
+
+    def test_declared_prior_application_with_no_record_is_surfaced(self):
+        apps = [_app("100", _date("2026-07-28"), applied_before="YES")]
+        self.assertEqual(eb.unverifiable(apps, "FY26"), {"100"})
+
+    def test_a_candidate_whose_history_is_on_record_is_not_surfaced(self):
+        """The window rule can judge them, so they are not 'unverifiable'."""
+        apps = [
+            _app("100", _date("2026-02-05"), applied_before="NO"),
+            _app("100", _date("2026-10-15"), applied_before="YES"),
+        ]
+        self.assertEqual(eb.unverifiable(apps, "FY27"), set())
+
+    def test_declaring_no_previous_application_is_taken_at_face_value(self):
+        apps = [_app("100", _date("2026-07-28"), applied_before="NO")]
+        self.assertEqual(eb.unverifiable(apps, "FY26"), set())
+
+    def test_a_blank_declaration_is_not_treated_as_a_yes(self):
+        apps = [_app("100", _date("2026-07-28"), applied_before="")]
+        self.assertEqual(eb.unverifiable(apps, "FY26"), set())
+
+    def test_only_the_campaign_being_reported_is_considered(self):
+        apps = [_app("100", _date("2026-07-28"), applied_before="YES")]
+        self.assertEqual(eb.unverifiable(apps, "FY27"), set())
 
 
 class TestDescribe(unittest.TestCase):
