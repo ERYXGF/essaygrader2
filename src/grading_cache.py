@@ -123,6 +123,16 @@ GRADE_REASONS = (
     REASON_STALE_RUBRIC,
 )
 
+# The subset that is genuinely *new work* — a submission with no usable grade —
+# as opposed to regrading something already graded because the rubric moved.
+# The distinction is what "incremental" means, and what the run confirmation
+# offers to take on its own.
+INCREMENTAL_REASONS = (
+    REASON_NEW,
+    REASON_CHANGED,
+    REASON_REEXTRACTED,
+)
+
 # Human-readable labels for the dry-run report.
 REASON_LABELS = {
     REASON_NEW: "new submission",

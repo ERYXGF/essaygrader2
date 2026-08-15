@@ -177,6 +177,88 @@ class TestReportOnly(unittest.TestCase):
         self.assertIn("2|TRI", output)
 
 
+class TestConfirmGrading(unittest.TestCase):
+    """Nothing is graded until this says so. A rubric change silently makes
+    every cached grade stale, so an ordinary run can become a full regrade
+    nobody chose to pay for — this is where that choice gets made."""
+
+    def _classified(self, new=0, stale=0):
+        rows = [(_essay(f"n{i}", "TRI", "x"), gc.REASON_NEW) for i in range(new)]
+        rows += [
+            (_essay(f"s{i}", "LTC", "x"), gc.REASON_STALE_RUBRIC) for i in range(stale)
+        ]
+        return rows
+
+    def _answer(self, classified, replies, **kwargs):
+        """Runs the prompt against scripted keystrokes; returns (chosen, output)."""
+        buffer = io.StringIO()
+        with mock.patch.object(main.sys.stdin, "isatty", return_value=True), \
+             mock.patch("builtins.input", side_effect=replies):
+            with redirect_stdout(buffer):
+                chosen = main._confirm_grading(classified, **kwargs)
+        return chosen, buffer.getvalue()
+
+    def test_yes_grades_everything(self):
+        chosen, _ = self._answer(self._classified(new=4, stale=154), ["y"])
+        self.assertEqual(len(chosen), 158)
+
+    def test_only_new_skips_the_rubric_regrade(self):
+        """The whole point: incremental without needing --roles."""
+        chosen, output = self._answer(self._classified(new=4, stale=154), ["o"])
+        self.assertEqual(len(chosen), 4)
+        self.assertTrue(all(e["candidate_number"].startswith("n") for e in chosen))
+        self.assertIn("[o]", output)
+
+    def test_no_cancels(self):
+        chosen, _ = self._answer(self._classified(new=4, stale=154), ["n"])
+        self.assertEqual(chosen, [])
+
+    def test_eof_cancels_rather_than_proceeding(self):
+        chosen, _ = self._answer(self._classified(new=1, stale=1), EOFError())
+        self.assertEqual(chosen, [])
+
+    def test_unrecognised_input_reasks(self):
+        """A typo must not be read as consent, nor as a refusal."""
+        chosen, output = self._answer(self._classified(new=1, stale=1), ["what", "y"])
+        self.assertEqual(len(chosen), 2)
+        self.assertIn("Please answer", output)
+
+    def test_all_new_work_is_not_offered_a_pointless_choice(self):
+        chosen, output = self._answer(self._classified(new=3), ["y"])
+        self.assertEqual(len(chosen), 3)
+        self.assertNotIn("[o]", output)
+
+    def test_the_reasons_are_shown_not_just_the_total(self):
+        """158 alone does not tell you it is 154 regrades and 4 new essays."""
+        _, output = self._answer(self._classified(new=4, stale=154), ["y"])
+        self.assertIn("About to grade 158", output)
+        self.assertIn(gc.REASON_LABELS[gc.REASON_NEW], output)
+        self.assertIn(gc.REASON_LABELS[gc.REASON_STALE_RUBRIC], output)
+
+    def test_assume_yes_never_prompts(self):
+        classified = self._classified(new=4, stale=154)
+        buffer = io.StringIO()
+        with mock.patch("builtins.input", side_effect=AssertionError("prompted!")):
+            with redirect_stdout(buffer):
+                chosen = main._confirm_grading(classified, assume_yes=True)
+        self.assertEqual(len(chosen), 158)
+
+    def test_a_non_interactive_run_proceeds_as_it_always_did(self):
+        """Blocking a scripted run on a prompt nobody can answer would be worse
+        than the problem this solves."""
+        buffer = io.StringIO()
+        with mock.patch.object(main.sys.stdin, "isatty", return_value=False), \
+             mock.patch("builtins.input", side_effect=AssertionError("prompted!")):
+            with redirect_stdout(buffer):
+                chosen = main._confirm_grading(self._classified(new=2, stale=2))
+        self.assertEqual(len(chosen), 4)
+        self.assertIn("not a terminal", buffer.getvalue())
+
+    def test_nothing_to_grade_asks_nothing(self):
+        with mock.patch("builtins.input", side_effect=AssertionError("prompted!")):
+            self.assertEqual(main._confirm_grading([]), [])
+
+
 class TestEmbargoWiring(unittest.TestCase):
     """The embargo annotates results; it never blocks or skips a candidate."""
 
@@ -321,6 +403,11 @@ class TestArgParsing(unittest.TestCase):
         args = main._parse_args(["--report-only", "--fy", "FY26"])
         self.assertTrue(args.report_only)
         self.assertEqual(args.fy, "FY26")
+
+    def test_yes_defaults_off_and_parses(self):
+        self.assertFalse(main._parse_args([]).yes)
+        self.assertTrue(main._parse_args(["--yes"]).yes)
+        self.assertTrue(main._parse_args(["-y"]).yes)
 
     def test_recruitment_list_defaults_to_none_and_parses(self):
         self.assertIsNone(main._parse_args([]).recruitment_list)

@@ -158,6 +158,31 @@ python src\main.py
 A clean run for ~5 essays takes 30 seconds to a couple of minutes,
 depending on essay length and network latency.
 
+### Nothing is graded until you say so
+
+Before spending anything, a run shows what it is about to grade **and why**, and
+waits:
+
+```
+❓ About to grade 157 essay(s):
+         3  new submission
+       154  older rubric
+
+   [y] grade all 157
+   [o] only the 3 new/changed — skip the rubric regrade
+   [n] cancel
+```
+
+The reasons matter more than the total. Editing the rubric marks **every**
+cached grade stale, so an ordinary run can quietly turn into a full regrade —
+`154 older rubric` is what tells you that is about to happen, and `[o]` is how
+you take just the new work instead. That is the incremental case: adding a
+handful of new submissions to an already-graded corpus costs only those few.
+
+`[o]` appears only when there is a mix; if everything is new there is nothing to
+narrow to. Cancelling stops the run without writing a report. A non-interactive
+run (no terminal) proceeds without asking, as does `--yes`.
+
 ---
 
 ## Command-line flags
@@ -168,6 +193,7 @@ depending on essay length and network latency.
 | `--report-only` | Rebuilds the Excel report from cached grades without grading anything. Use it to pick up a *reporting* change. Still runs the plagiarism screen, which the Similarity sheet needs, so it costs a couple of calls rather than nothing. |
 | `--roles TRI` or `--roles TRI,TFO` | Scopes a rubric-driven **regrade** to particular roles. New and edited submissions are always graded whatever their role — scoping never suppresses new work, or the report would silently gain a hole. |
 | `--fy FY26` | Reports on a specific campaign, overriding `config/campaign.txt` for one run. Earlier campaigns stay cached, so a past year's report can be regenerated at any time. |
+| `-y`, `--yes` | Grade without asking for confirmation. For scripts; interactively you want the prompt. |
 | `--recruitment-list PATH` | Uses a specific export instead of the newest one found in `input/`. |
 
 ---

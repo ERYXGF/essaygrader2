@@ -15,6 +15,8 @@ difference between a free run and an expensive one.
 """
 
 import argparse
+import sys
+from collections import Counter
 from pathlib import Path
 from typing import Optional, Set
 
@@ -34,6 +36,7 @@ from grading_cache import (
     stale_keys,
     stale_extractions,
     GRADE_REASONS,
+    INCREMENTAL_REASONS,
     REASON_CHANGED,
     REASON_NEW,
     REASON_REEXTRACTED,
@@ -53,6 +56,83 @@ from embargo import find_embargoes, describe as describe_embargo, EMBARGO_MONTHS
 from report_writer import write_report
 
 
+def _print_breakdown(counts, grade_label: str, reuse_label: str) -> None:
+    """Prints the counts-by-reason for a set of classified essays.
+
+    Shared by the dry run and the run confirmation on purpose: the confirmation
+    has to show exactly what the dry run promised, and one piece of code is the
+    only way that stays true. The reasons matter as much as the total — "4" and
+    "154" are the difference between an incremental run and a full regrade, and
+    the count alone cannot tell you which you are about to pay for.
+    """
+    total = sum(counts[r] for r in GRADE_REASONS)
+    print(f"   {grade_label} {total}:")
+    for reason in GRADE_REASONS:
+        if counts[reason]:
+            print(f"      {counts[reason]:4d}  {REASON_LABELS[reason]}")
+    print(f"   {reuse_label} {sum(counts.values()) - total}:")
+    for reason, count in counts.items():
+        if reason not in GRADE_REASONS and count:
+            print(f"      {count:4d}  {REASON_LABELS[reason]}")
+
+
+def _confirm_grading(classified: list, assume_yes: bool = False) -> list:
+    """Asks before spending, and returns the essays to grade.
+
+    Returns every essay to grade, only the new/changed ones, or an empty list
+    to cancel the run. A rubric change silently marks every cached grade stale,
+    so an unscoped run can turn into a full regrade without anyone deciding to
+    pay for one; this is where that decision gets made.
+
+    The "only new/changed" option is offered only when there is something to
+    skip. Where all the work is new it would be a choice between a thing and
+    itself.
+
+    A non-interactive run proceeds with everything, as it always did — blocking
+    a scripted run on a prompt nobody can answer would be worse than the problem
+    this solves.
+    """
+    to_grade = [e for e, r in classified if r in GRADE_REASONS]
+    if not to_grade or assume_yes:
+        return to_grade
+
+    if not sys.stdin.isatty():
+        print("   (not a terminal — proceeding without confirmation)")
+        return to_grade
+
+    incremental = [e for e, r in classified if r in INCREMENTAL_REASONS]
+    counts = Counter(reason for _, reason in classified)
+
+    print()
+    print(f"❓ About to grade {len(to_grade)} essay(s):")
+    for reason in GRADE_REASONS:
+        if counts[reason]:
+            print(f"      {counts[reason]:4d}  {REASON_LABELS[reason]}")
+    print()
+    print(f"   [y] grade all {len(to_grade)}")
+    can_narrow = 0 < len(incremental) < len(to_grade)
+    if can_narrow:
+        print(
+            f"   [o] only the {len(incremental)} new/changed — "
+            f"skip the rubric regrade"
+        )
+    print("   [n] cancel")
+
+    while True:
+        try:
+            answer = input("> ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return []
+        if answer in ("y", "yes"):
+            return to_grade
+        if answer in ("n", "no"):
+            return []
+        if can_narrow and answer in ("o", "only"):
+            return incremental
+        print("   Please answer " + ("y, o or n." if can_narrow else "y or n."))
+
+
 def _report_dry_run(
     essays: list, cache: dict, current_prompt_hash: str, version: str, roles,
     campaign: str = "",
@@ -62,8 +142,6 @@ def _report_dry_run(
     Reads the same classify() the real run uses, so the report cannot drift
     from what would actually happen.
     """
-    from collections import Counter
-
     classified = classify(essays, cache, current_prompt_hash, roles, campaign)
     counts = Counter(reason for _, reason in classified)
     would_grade = sum(counts[r] for r in GRADE_REASONS)
@@ -83,14 +161,7 @@ def _report_dry_run(
     if roles is not None:
         print(f"   Regrade scoped to: {', '.join(sorted(roles))}")
     print()
-    print(f"   Would grade {would_grade}:")
-    for reason in GRADE_REASONS:
-        if counts[reason]:
-            print(f"      {counts[reason]:4d}  {REASON_LABELS[reason]}")
-    print(f"   Would reuse {len(classified) - would_grade}:")
-    for reason, count in counts.items():
-        if reason not in GRADE_REASONS and count:
-            print(f"      {count:4d}  {REASON_LABELS[reason]}")
+    _print_breakdown(counts, "Would grade", "Would reuse")
 
     # Resubmissions bypass --roles, so name them rather than just counting.
     changed = [e for e, r in classified if r == REASON_CHANGED]
@@ -295,6 +366,7 @@ def run_pipeline(
     report_only: bool = False,
     fy: Optional[str] = None,
     recruitment_list: Optional[str] = None,
+    assume_yes: bool = False,
 ) -> None:
     # ============================================================
     # PATHS  (project root = parent of src/)
@@ -345,7 +417,8 @@ def run_pipeline(
     # STEP 2 — CLAUDE GRADING (incremental — cached grades reused)
     # ============================================================
     # Only new or changed essays are graded. If the rubric changed, the whole
-    # cache is stale and everything is regraded (handled inside partition()).
+    # cache is stale and everything would be regraded — which is why the run
+    # asks before spending, rather than discovering it on the invoice.
     cache = load_cache(str(cache_file))
     # Fingerprint covers the rubric AND the model — a grade is only reusable
     # when both are unchanged.
@@ -380,7 +453,7 @@ def run_pipeline(
             for essay, reason in classify(
                 essays, cache, current_prompt_hash, roles, campaign
             )
-            if reason in (REASON_NEW, REASON_CHANGED, REASON_REEXTRACTED)
+            if reason in INCREMENTAL_REASONS
         ]
         if ungraded:
             print(
@@ -392,11 +465,10 @@ def run_pipeline(
             if len(ungraded) > 10:
                 print(f"      ... and {len(ungraded) - 10} more")
     else:
-        to_grade, reused = partition(
-            essays, cache, current_prompt_hash, roles, campaign
-        )
+        classified = classify(essays, cache, current_prompt_hash, roles, campaign)
+        to_grade = [e for e, r in classified if r in GRADE_REASONS]
         print(
-            f"🗃️  Reusing {len(reused)} cached grade(s); "
+            f"🗃️  Reusing {len(classified) - len(to_grade)} cached grade(s); "
             f"grading {len(to_grade)} new/changed essay(s)"
         )
     _warn_stale_extractions(essays, cache, campaign)
@@ -408,6 +480,13 @@ def run_pipeline(
             f"   ⚠ Regrade scoped to {', '.join(sorted(roles))} — "
             f"{max(left, 0)} grade(s) from an older rubric left untouched"
         )
+
+    if to_grade:
+        # The last point at which this run is still free.
+        to_grade = _confirm_grading(classified, assume_yes)
+        if not to_grade:
+            print("   ✋ Cancelled — nothing was graded, no report written.")
+            return
 
     if to_grade:
         print("📤 Sending essays to Claude...")
@@ -531,6 +610,17 @@ def _parse_args(argv=None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "-y", "--yes",
+        action="store_true",
+        help=(
+            "Grade without asking for confirmation. A run normally shows how "
+            "many essays it is about to grade, and why, and waits for you — "
+            "a rubric change quietly makes every cached grade stale, so an "
+            "ordinary run can become a full regrade nobody chose to pay for. "
+            "Use this in scripts."
+        ),
+    )
+    parser.add_argument(
         "--recruitment-list",
         default=None,
         help=(
@@ -557,4 +647,5 @@ if __name__ == "__main__":
         report_only=args.report_only,
         fy=args.fy,
         recruitment_list=args.recruitment_list,
+        assume_yes=args.yes,
     )
