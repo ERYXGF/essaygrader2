@@ -177,6 +177,65 @@ class TestReportOnly(unittest.TestCase):
         self.assertIn("2|TRI", output)
 
 
+class TestEmbargoWiring(unittest.TestCase):
+    """The embargo annotates results; it never blocks or skips a candidate."""
+
+    def _results(self):
+        return [
+            {"candidate_number": "872524", "Role": "TRI"},
+            {"candidate_number": "860775", "Role": "LTC"},
+        ]
+
+    def _list(self, rows):
+        handle = tempfile.NamedTemporaryFile(
+            "w", suffix=".csv", delete=False, encoding="utf-8-sig", newline=""
+        )
+        handle.write("Created,Staff Number,Position applied for,OUTCOME\n")
+        for created, staff, role in rows:
+            handle.write(f"{created},{staff},{role},\n")
+        handle.close()
+        return handle.name
+
+    def test_a_missing_list_marks_every_row_rather_than_leaving_it_blank(self):
+        """A blank cell reads as 'checked and clear'. Not checking is not clear."""
+        results = self._results()
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            main._apply_embargoes(results, "FY27", "/nonexistent/list.csv")
+        self.assertTrue(all(r["embargo"] == main.NOT_CHECKED for r in results))
+        self.assertIn("NOT checked", buffer.getvalue())
+
+    def test_flags_a_reapplicant_and_clears_the_others(self):
+        path = self._list([
+            ("25/07/2026 09:12", "872524", "TRI"),   # FY26
+            ("12/10/2026 08:30", "872524", "LTC"),   # FY27, 79 days later
+            ("15/11/2026 09:00", "860775", "TRI"),   # FY27 only
+        ])
+        results = self._results()
+        with redirect_stdout(io.StringIO()):
+            main._apply_embargoes(results, "FY27", path)
+        self.assertTrue(results[0]["embargo"].startswith("⚠"))
+        self.assertEqual(results[1]["embargo"], "")
+
+    def test_a_candidate_absent_from_the_list_is_marked_unknown(self):
+        path = self._list([("12/10/2026 08:30", "872524", "LTC")])
+        results = self._results()
+        with redirect_stdout(io.StringIO()):
+            main._apply_embargoes(results, "FY27", path)
+        self.assertEqual(results[1]["embargo"], main.NOT_LISTED)
+
+    def test_nothing_is_removed_from_the_results(self):
+        """Flag only: an embargoed candidate is still graded and still reported."""
+        path = self._list([
+            ("25/07/2026 09:12", "872524", "TRI"),
+            ("12/10/2026 08:30", "872524", "LTC"),
+        ])
+        results = self._results()
+        with redirect_stdout(io.StringIO()):
+            main._apply_embargoes(results, "FY27", path)
+        self.assertEqual(len(results), 2)
+
+
 class TestArgParsing(unittest.TestCase):
     def test_dry_run_defaults_off(self):
         self.assertFalse(main._parse_args([]).dry_run)
@@ -198,6 +257,11 @@ class TestArgParsing(unittest.TestCase):
         args = main._parse_args(["--report-only", "--fy", "FY26"])
         self.assertTrue(args.report_only)
         self.assertEqual(args.fy, "FY26")
+
+    def test_recruitment_list_defaults_to_none_and_parses(self):
+        self.assertIsNone(main._parse_args([]).recruitment_list)
+        args = main._parse_args(["--recruitment-list", "/tmp/list.csv"])
+        self.assertEqual(args.recruitment_list, "/tmp/list.csv")
 
 
 if __name__ == "__main__":

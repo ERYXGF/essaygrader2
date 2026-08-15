@@ -38,6 +38,8 @@ from grading_cache import (
     REASON_LABELS,
 )
 from plagiarism_checker import check_plagiarism, apply_plagiarism_overrides
+from recruitment_list import load_report as load_recruitment_list, DEFAULT_LIST_FILE
+from embargo import find_embargoes, describe as describe_embargo, EMBARGO_MONTHS
 from report_writer import write_report
 
 
@@ -121,11 +123,70 @@ def _warn_stale_extractions(essays: list, cache: dict) -> None:
         print(f"      ... and {len(drifted) - 10} more")
 
 
+NOT_CHECKED = "? embargo not checked — recruitment list missing"
+NOT_LISTED = "? not in recruitment list"
+
+
+def _apply_embargoes(results: list, campaign: str, list_path) -> None:
+    """Annotates each result with its re-application embargo status, in place.
+
+    A blank cell must mean "checked, and clear" — never "not checked". Any
+    candidate we could not judge is therefore marked explicitly, because a
+    blank in a workbook that circulates would be read as a clean bill of
+    health, which is exactly the mistake this column exists to prevent.
+    """
+    list_file = Path(list_path) if list_path else DEFAULT_LIST_FILE
+
+    try:
+        applications, skipped = load_recruitment_list(list_file)
+    except FileNotFoundError:
+        print(
+            f"   ⚠ No recruitment list at {list_file} — the {EMBARGO_MONTHS}-month "
+            f"re-application embargo was NOT checked."
+        )
+        for result in results:
+            result["embargo"] = NOT_CHECKED
+        return
+
+    if skipped:
+        # These rows carry no staff number or no readable date, so they cannot
+        # place an application in time. Say so — a silently dropped row is a
+        # candidate who could clear the embargo when they should not.
+        print(f"   ⚠ {skipped} recruitment list row(s) skipped (no staff number or date)")
+
+    embargoes = find_embargoes(applications, campaign)
+    listed = {a.staff_number for a in applications}
+
+    flagged = unlisted = 0
+    for result in results:
+        number = str(result.get("candidate_number", ""))
+        if number in embargoes:
+            result["embargo"] = describe_embargo(embargoes[number])
+            flagged += 1
+        elif number in listed:
+            result["embargo"] = ""  # checked and clear
+        else:
+            result["embargo"] = NOT_LISTED
+            unlisted += 1
+
+    print(
+        f"   ✓ Embargo check ({EMBARGO_MONTHS} months, any role): "
+        f"{flagged} flagged, {unlisted} not in the list, "
+        f"{len(results) - flagged - unlisted} clear"
+    )
+    if unlisted:
+        print(
+            "     Candidates absent from the list cannot be checked — the "
+            "export may predate their application."
+        )
+
+
 def run_pipeline(
     roles: Optional[Set[str]] = None,
     dry_run: bool = False,
     report_only: bool = False,
     fy: Optional[str] = None,
+    recruitment_list: Optional[str] = None,
 ) -> None:
     # ============================================================
     # PATHS  (project root = parent of src/)
@@ -273,7 +334,15 @@ def run_pipeline(
     print(f"   ✓ {len(similarity_pairs)} pair(s) flagged for review")
 
     # ============================================================
-    # STEP 4 — REPORT GENERATION
+    # STEP 4 — RE-APPLICATION EMBARGO
+    # ============================================================
+    # Reported, never enforced: the row is graded and written either way, and a
+    # human decides what the flag is worth.
+    print("📋 Checking the re-application embargo...")
+    _apply_embargoes(results, campaign, recruitment_list)
+
+    # ============================================================
+    # STEP 5 — REPORT GENERATION
     # ============================================================
     print("📝 Writing Excel report...")
     write_report(
@@ -327,6 +396,16 @@ def _parse_args(argv=None) -> argparse.Namespace:
             "cache, so a past year's report can be regenerated at any time."
         ),
     )
+    parser.add_argument(
+        "--recruitment-list",
+        default=None,
+        help=(
+            "Path to the Instructor Recruitment Master List CSV export, which "
+            "supplies the true submission dates the re-application embargo is "
+            f"measured from. Defaults to {DEFAULT_LIST_FILE}. Without it the "
+            "embargo cannot be checked and every row says so."
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -342,4 +421,5 @@ if __name__ == "__main__":
         dry_run=args.dry_run,
         report_only=args.report_only,
         fy=args.fy,
+        recruitment_list=args.recruitment_list,
     )

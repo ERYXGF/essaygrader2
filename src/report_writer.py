@@ -4,6 +4,8 @@ The report has up to three sheets:
 - Summary    : one row per candidate, headline grades, colour-coded classification,
                a Double Application column marking candidates who applied for
                more than one role,
+               an Embargo column flagging candidates who re-applied within six
+               months of an earlier campaign's application,
                a File Format column flagging submissions that aren't PDFs,
                a Rubric Version column (shaded when the row was graded under an
                older rubric than this run, as happens after a role-scoped
@@ -72,6 +74,7 @@ def write_report(
         "Candidate Number",
         "Role",
         "Double Application",
+        "Embargo",
         "Classification",
         "Passion",
         "Humility",
@@ -99,6 +102,7 @@ def write_report(
             r.get("candidate_number", "Unknown"),
             r.get("Role", "Unknown"),
             "Yes" if r.get("candidate_number") in double_applicants else "No",
+            r.get("embargo", ""),
             r.get("classification", "Unknown"),
             cca.get("passion", ""),
             cca.get("humility", ""),
@@ -129,6 +133,20 @@ def write_report(
         rubric_cell = ws1.cell(row=row_idx, column=summary_headers.index("Rubric Version") + 1)
         if r.get("rubric_is_current") is False:
             rubric_cell.fill = yellow
+
+        # Embargo: a candidate re-applying inside the six-month window. Long
+        # text, so it wraps; red because the policy says they should not be in
+        # this campaign at all. A blank cell means "checked and clear"; the
+        # unknown marker means the recruitment list had nothing on them.
+        embargo_cell = ws1.cell(
+            row=row_idx, column=summary_headers.index("Embargo") + 1
+        )
+        embargo_cell.alignment = Alignment(vertical="center", wrap_text=True)
+        embargo_value = str(embargo_cell.value or "")
+        if embargo_value.startswith("⚠"):
+            embargo_cell.fill = red
+        elif embargo_value:
+            embargo_cell.fill = yellow  # unknown — not cleared, not condemned
 
         # Plagiarism flag: wrap (can hold one line per matched pair) and
         # colour-band by risk so flagged rows stand out at a glance.

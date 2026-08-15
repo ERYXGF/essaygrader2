@@ -198,6 +198,26 @@ class TestSummarySheet(unittest.TestCase):
         col = headers.index("Double Application")
         self.assertEqual([r[col] for r in rows], ["Yes", "Yes", "No"])
 
+    def test_embargo_text_is_written_and_banded_red(self):
+        flagged = _result("1", "TRI", [])
+        flagged["embargo"] = "⚠ Re-applied 79d (2.6 months) after FY26 application"
+        headers, rows, fills = self._summary([flagged, _result("2", "LTC", [])])
+        col = headers.index("Embargo")
+        self.assertTrue(str(rows[0][col]).startswith("⚠"))
+        self.assertEqual(fills["Embargo"][0].start_color.rgb, "00FFC7CE")
+
+    def test_an_unchecked_candidate_is_banded_but_not_condemned(self):
+        """'?' must not look the same as a clean check, nor as a breach."""
+        unknown = _result("1", "TRI", [])
+        unknown["embargo"] = "? not in recruitment list"
+        _, _, fills = self._summary([unknown])
+        self.assertEqual(fills["Embargo"][0].start_color.rgb, "00FFEB9C")
+
+    def test_a_clear_candidate_leaves_the_cell_blank_and_unfilled(self):
+        _, rows, fills = self._summary([_result("1", "TRI", [])])
+        self.assertIn(rows[0][3], ("", None))
+        self.assertNotEqual(fills["Embargo"][0].start_color.rgb, "00FFC7CE")
+
     def test_classification_band_still_lands_on_the_right_cell(self):
         """Regression: the colour band used to assume Classification was 3rd.
 
