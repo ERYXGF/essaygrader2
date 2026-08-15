@@ -229,27 +229,31 @@ class TestHistorySheet(unittest.TestCase):
             ws = load_workbook(path)["History"]
             return [[c.value for c in row] for row in ws.iter_rows()]
 
-    def _row(self, number, campaign, role="TRI", classification="Maybe"):
+    def _row(self, number, campaign, role="TRI", decision="NO", approval="REJECTED"):
         return {
             "candidate_number": number,
             "campaign": campaign,
             "role": role,
             "submitted": dt.date(2026, 7, 28),
-            "classification": classification,
-            "rubric_version": "v9.4",
+            "interview_decision": decision,
+            "final_approval": approval,
         }
 
     def test_a_returning_candidate_shows_every_campaign(self):
         rows = self._history([
-            self._row("872524", "FY26", "TRI", "Priority Interview"),
-            self._row("872524", "FY27", "LTC", "Maybe"),
+            self._row("872524", "FY26", "TRI", "NO", "REJECTED"),
+            self._row("872524", "FY27", "LTC", "PENDING", "PENDING"),
         ])
         self.assertEqual(
-            rows[0][:3], ["Candidate Number", "Financial Year", "Role"]
+            rows[0],
+            ["Candidate Number", "Financial Year", "Role", "Submitted",
+             "Interview Decision", "Final Approval"],
         )
         # Shown as the number the Power Automate flows join on.
         self.assertEqual([r[1] for r in rows[1:]], [2026, 2027])
-        self.assertEqual([r[4] for r in rows[1:]], ["Priority Interview", "Maybe"])
+        # What actually happened last time — the question a re-applicant raises.
+        self.assertEqual([r[4] for r in rows[1:]], ["NO", "PENDING"])
+        self.assertEqual([r[5] for r in rows[1:]], ["REJECTED", "PENDING"])
 
     def test_a_single_campaign_candidate_is_omitted(self):
         """Their one row is already the Summary; repeating ~150 of them would

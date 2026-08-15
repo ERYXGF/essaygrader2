@@ -28,7 +28,7 @@ import recruitment_list as rl
 # ------------------------------------------------------------
 HEADERS = (
     "Created,Created By,Email,Staff Number,Name,BASE,Position applied for,"
-    "\U0001f7e3 APPLICATION SUCCESSFUL \U0001f7e3,OUTCOME"
+    "\U0001f534 INTERVIEW DECISION \U0001f534,\U0001f534 FINAL APPROVAL \U0001f534"
 )
 
 
@@ -44,12 +44,12 @@ def _csv(rows, headers=HEADERS):
     return Path(handle.name)
 
 
-def _row(created, staff, role="TRI", successful="", outcome=""):
-    return f"{created},someone,a@b.com,{staff},A Name,LGW,{role},{successful},{outcome}"
+def _row(created, staff, role="TRI", decision="", approval=""):
+    return f"{created},someone,a@b.com,{staff},A Name,LGW,{role},{decision},{approval}"
 
 
-def _app(staff, date, role="TRI", outcome=""):
-    return rl.Application(staff, date, role, outcome, "")
+def _app(staff, date, role="TRI", decision="", approval="", year=""):
+    return rl.Application(staff, date, role, decision, approval, year)
 
 
 # The OData export straight from SharePoint: internal header names with
@@ -58,7 +58,7 @@ ODATA_HEADERS = (
     "@odata.etag,ID,Title,Created,Staff_x0020_Number,Name,"
     "Position_x0020_applied_x0020_for,Position_x0020_applied_x0020_for#Id,"
     "Have_x0020_you_x0020_applied_x00,Have_x0020_you_x0020_applied_x00#Id,"
-    "APPLICATIONSUCCESSFUL,FINALAPPROVAL"
+    "DECISION,FINALAPPROVAL"
 )
 
 
@@ -74,7 +74,7 @@ def _odata_row(created, staff, role="TRI"):
     return ",".join([
         "etag", "1", "Title", created, staff, "A Name",
         _choice(role), "2", _choice("NO"), "1",
-        _choice("YES"), _choice("PENDING"),
+        _choice("NO"), _choice("PENDING"),
     ])
 
 
@@ -101,10 +101,12 @@ class TestLoadApplications(unittest.TestCase):
         self.assertEqual(rl.load_applications(path)[0].submitted_at.month, 4)
 
     def test_headers_are_matched_through_their_emoji(self):
+        """The friendly export decorates its labels; the OData one does not."""
         apps = rl.load_applications(
-            _csv([_row("01/04/2026 11:56", "1", successful="YES")])
+            _csv([_row("01/04/2026 11:56", "1", decision="YES", approval="APPROVED")])
         )
-        self.assertEqual(apps[0].successful, "YES")
+        self.assertEqual(apps[0].interview_decision, "YES")
+        self.assertEqual(apps[0].final_approval, "APPROVED")
 
     def test_date_without_a_time_is_accepted(self):
         path = _csv([_row("28/07/2026", "1")])
@@ -148,7 +150,8 @@ class TestLoadApplications(unittest.TestCase):
         self.assertEqual(apps[0].staff_number, "860775")
         self.assertEqual(apps[0].submitted_at, _date("2026-06-04"))
         self.assertEqual(apps[0].role, "LTC")        # unwrapped from JSON
-        self.assertEqual(apps[0].outcome, "PENDING")  # FINALAPPROVAL
+        self.assertEqual(apps[0].final_approval, "PENDING")
+        self.assertEqual(apps[0].interview_decision, "NO")  # from DECISION
 
     def test_a_companion_id_column_does_not_shadow_its_real_column(self):
         """'Position applied for#Id' shares a prefix with the column we want."""
@@ -391,6 +394,71 @@ class TestFindExport(unittest.TestCase):
         message = str(caught.exception)
         self.assertIn(str(folder), message)
         self.assertIn("Recruitment_Export", message)
+
+
+class TestApplicationHistory(unittest.TestCase):
+    """Built from the List, not the cache — which is what makes it survive a
+    cache rebuild, and what lets it show applications never graded here."""
+
+    def test_a_returning_candidate_gets_every_application(self):
+        apps = [
+            _app("100", _date("2026-07-28"), "TRI", "NO", "REJECTED", "FY26"),
+            _app("100", _date("2026-10-12"), "LTC", "PENDING", "PENDING", "FY27"),
+        ]
+        rows = rl.application_history(apps, {"100"})
+        self.assertEqual([r["campaign"] for r in rows], ["FY26", "FY27"])
+        self.assertEqual([r["role"] for r in rows], ["TRI", "LTC"])
+        self.assertEqual(rows[0]["submitted"], _date("2026-07-28"))
+        self.assertEqual(rows[0]["interview_decision"], "NO")
+        self.assertEqual(rows[0]["final_approval"], "REJECTED")
+
+    def test_a_single_year_candidate_is_left_out(self):
+        apps = [_app("100", _date("2026-07-28"), "TRI", year="FY26")]
+        self.assertEqual(rl.application_history(apps, {"100"}), [])
+
+    def test_two_roles_in_one_year_is_not_a_history(self):
+        """Same campaign, days apart — that is Double Application, not history."""
+        apps = [
+            _app("100", _date("2026-07-25"), "LTC", year="FY26"),
+            _app("100", _date("2026-07-28"), "TRI", year="FY26"),
+        ]
+        self.assertEqual(rl.application_history(apps, {"100"}), [])
+
+    def test_a_repeat_applicant_not_in_this_report_is_left_out(self):
+        """The sheet answers 'for the people I am assessing now'."""
+        apps = [
+            _app("100", _date("2026-07-28"), "TRI", year="FY26"),
+            _app("100", _date("2026-10-12"), "LTC", year="FY27"),
+        ]
+        self.assertEqual(rl.application_history(apps, {"999"}), [])
+
+    def test_no_applications_and_no_candidates(self):
+        self.assertEqual(rl.application_history([], {"100"}), [])
+        self.assertEqual(rl.application_history([], set()), [])
+        self.assertEqual(rl.application_history([], None), [])
+
+    def test_a_hold_decision_survives_unmapped(self):
+        """The live export carries PENDING and HOLD as well as YES/NO, so
+        nothing may treat a non-YES as a NO."""
+        apps = [
+            _app("100", _date("2026-07-28"), "TRI", "HOLD", "PENDING", "FY26"),
+            _app("100", _date("2026-10-12"), "LTC", "YES", "APPROVED", "FY27"),
+        ]
+        rows = rl.application_history(apps, {"100"})
+        self.assertEqual([r["interview_decision"] for r in rows], ["HOLD", "YES"])
+
+    def test_rows_are_ordered_by_candidate_then_year(self):
+        apps = [
+            _app("200", _date("2026-10-12"), "LTC", year="FY27"),
+            _app("100", _date("2026-10-12"), "LTC", year="FY27"),
+            _app("100", _date("2026-07-28"), "TRI", year="FY26"),
+            _app("200", _date("2026-07-28"), "TRI", year="FY26"),
+        ]
+        rows = rl.application_history(apps, {"100", "200"})
+        self.assertEqual(
+            [(r["candidate_number"], r["campaign"]) for r in rows],
+            [("100", "FY26"), ("100", "FY27"), ("200", "FY26"), ("200", "FY27")],
+        )
 
 
 class TestSubmittedDates(unittest.TestCase):

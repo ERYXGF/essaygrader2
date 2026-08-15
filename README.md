@@ -34,9 +34,11 @@ version with anonymisation, see `../essaygrader/`.
      so a candidate who answered out of sequence still lines up with the rest
    - **Similarity**: one row per flagged essay pair with similarity scores,
      Claude's verdict and quoted shared evidence
-   - **History**: every application by a candidate who appears in more than one
-     campaign. The only sheet that crosses campaign boundaries, so a returning
-     candidate's earlier grades sit beside the current one
+   - **History**: every application by a candidate **in this report** who has
+     applied in more than one financial year — role, submission date, interview
+     decision and final approval, for each year. Built from the recruitment
+     list rather than the grading cache, so it survives a cache rebuild and can
+     show applications that were never graded here at all
 
 **Every sheet carries `Financial Year`** — as the number `2026`, matching the
 recruitment List's own `FINANCIALYEAR` field. Once the List holds more than one
@@ -188,7 +190,14 @@ looks stale; it never overrides the file.
 Nothing is ever deleted. Earlier campaigns stay in the grading cache and can be
 reported on with `--fy FY26` at any time. A candidate who applied in FY26 and
 re-applies in FY27 gets a **separate** cache entry, so last year's grade
-survives — the History sheet is what shows you both.
+survives, and `--fy FY26` can rebuild last year's report.
+
+The **History** sheet does not depend on the cache at all: it is built from the
+recruitment list, which records every application there has ever been. So even
+if the cache were deleted and rebuilt from scratch, a returning candidate's
+prior applications — with their dates and outcomes — still appear. Only the
+*grades* live in the cache, and those are also in each campaign's own report
+file.
 
 ### A run will not grade another campaign's essays
 

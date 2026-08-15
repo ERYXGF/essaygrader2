@@ -61,8 +61,9 @@ def write_report(
     callers are unaffected. An empty list writes the sheet with a
     "no pairs flagged" row, so a clean run is distinguishable from no run.
 
-    history is grading_cache.history() — every graded submission across all
-    campaigns. Pass None to skip the History sheet.
+    history is recruitment_list.application_history() — every application by
+    a candidate in this report who has applied in more than one campaign.
+    Pass None to skip the History sheet.
 
     campaign is this run's campaign ('FY26'). It stamps the Similarity
     sheet, whose rows are pairs and so carry no campaign of their own —
@@ -358,8 +359,8 @@ def _write_history_sheet(
         "Financial Year",
         "Role",
         "Submitted",
-        "Classification",
-        "Rubric Version",
+        "Interview Decision",
+        "Final Approval",
     ]
     for col, h in enumerate(headers, 1):
         cell = ws.cell(row=1, column=col, value=h)
@@ -389,8 +390,8 @@ def _write_history_sheet(
             year_of(row.get("campaign", "")),
             row.get("role", ""),
             row.get("submitted", ""),
-            row.get("classification", ""),
-            row.get("rubric_version", ""),
+            row.get("interview_decision", ""),
+            row.get("final_approval", ""),
         ]
         for col, val in enumerate(values, 1):
             _write_date(ws.cell(row=row_idx, column=col), val)

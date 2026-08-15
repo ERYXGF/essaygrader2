@@ -123,8 +123,11 @@ class Application(NamedTuple):
     staff_number: str
     submitted_at: dt.date
     role: str
-    outcome: str  # final decision where recorded: YES/NO/PENDING/APPROVED/...
-    successful: str  # 'APPLICATION SUCCESSFUL' — the written-task sift result.
+    # Reported verbatim, never interpreted. INTERVIEW DECISION is not the
+    # YES/NO it looks like — the live export also carries PENDING and HOLD —
+    # so nothing here may treat a non-YES as a NO.
+    interview_decision: str  # YES / NO / PENDING / HOLD / ''
+    final_approval: str  # APPROVED / REJECTED / PENDING / ''
     financial_year: str = ""  # declared campaign, normalised: '2026' -> 'FY26'
 
 
@@ -175,16 +178,16 @@ def unwrap(value: str) -> str:
 _CREATED = "created"
 _STAFF_NUMBER = "staffnumber"
 _ROLE = "positionappliedfor"
-_SUCCESSFUL = "applicationsuccessful"
 _FINANCIAL_YEAR = "financialyear"
+_FINAL_APPROVAL = "finalapproval"
+
+# The friendly export labels this "🔴 INTERVIEW DECISION 🔴"; the OData one
+# calls it plain DECISION. Exact matching resolves DECISION ahead of its
+# DECISION#Id companion, and IDPSIMDECISION shares no prefix with either.
+_INTERVIEW_DECISION = ("interviewdecision", "decision")
 
 # Readable names for the error message, since the lookup keys are squashed.
 _COLUMN_LABELS = {_CREATED: "Created", _STAFF_NUMBER: "Staff Number"}
-
-# The final decision lives under a different label in each export, and under
-# more than one in the OData one. Tried in order of finality: an approval
-# outcome beats an interview decision, which beats the generic column.
-_OUTCOME_COLUMNS = ("finalapproval", "decision", "outcome")
 
 REQUIRED_COLUMNS = (_CREATED, _STAFF_NUMBER)
 
@@ -311,8 +314,8 @@ def load_report(path: Optional[Path] = None):
             return index[candidates[0]]
 
         positions = {key: locate(key) for key in
-                     (_CREATED, _STAFF_NUMBER, _ROLE, _SUCCESSFUL,
-                      _FINANCIAL_YEAR)}
+                     (_CREATED, _STAFF_NUMBER, _ROLE, _FINANCIAL_YEAR,
+                      _FINAL_APPROVAL)}
         missing = [c for c in REQUIRED_COLUMNS if positions.get(c) is None]
         if missing:
             raise ValueError(
@@ -320,8 +323,9 @@ def load_report(path: Optional[Path] = None):
                 f"{', '.join(_COLUMN_LABELS.get(c, c) for c in missing)}. "
                 f"Found: {', '.join(headers[:20])}"
             )
-        outcome_position = next(
-            (p for p in (locate(c) for c in _OUTCOME_COLUMNS) if p is not None), None
+        interview_position = next(
+            (p for p in (locate(c) for c in _INTERVIEW_DECISION)
+             if p is not None), None
         )
 
         def field(row: List[str], position: Optional[int]) -> str:
@@ -344,8 +348,8 @@ def load_report(path: Optional[Path] = None):
                     staff_number=staff_number,
                     submitted_at=submitted_at,
                     role=field(row, positions[_ROLE]),
-                    outcome=field(row, outcome_position).upper(),
-                    successful=field(row, positions[_SUCCESSFUL]).upper(),
+                    interview_decision=field(row, interview_position).upper(),
+                    final_approval=field(row, positions[_FINAL_APPROVAL]).upper(),
                     financial_year=parse_financial_year(
                         field(row, positions[_FINANCIAL_YEAR])
                     ),
@@ -401,6 +405,49 @@ def submitted_for(
         if staff == staff_number and camp == campaign
     ]
     return max(same_campaign) if same_campaign else None
+
+
+def application_history(
+    applications: List[Application], staff_numbers
+) -> List[Dict]:
+    """Every application by a candidate in this report who has applied before.
+
+    Built from the List rather than from the grading cache, which is what makes
+    it survive a cache rebuild: the cache remembers only what this pipeline
+    graded, while the List records every application there has ever been —
+    including ones predating this pipeline, and ones never graded here at all.
+
+    Restricted to `staff_numbers` — the candidates in the current report — so it
+    answers "for the people I am assessing now, what is their history?" That
+    pairs with the Embargo column, which likewise only speaks about candidates
+    in the current campaign.
+
+    Candidates confined to a single financial year are left out: their one row
+    is already the Summary, and including all of them would bury the few
+    returning candidates the sheet exists to show.
+    """
+    wanted = {str(n) for n in (staff_numbers or ())}
+    grouped = by_staff_number(
+        [a for a in applications if a.staff_number in wanted]
+    )
+
+    rows: List[Dict] = []
+    for staff_number, history in grouped.items():
+        campaigns = {campaign_of_application(a) for a in history}
+        if len(campaigns) < 2:
+            continue
+        for application in history:
+            rows.append({
+                "candidate_number": staff_number,
+                "campaign": campaign_of_application(application),
+                "role": application.role,
+                "submitted": application.submitted_at,
+                "interview_decision": application.interview_decision,
+                "final_approval": application.final_approval,
+            })
+
+    rows.sort(key=lambda r: (r["candidate_number"], r["campaign"], r["submitted"]))
+    return rows
 
 
 def by_staff_number(applications: List[Application]) -> Dict[str, List[Application]]:

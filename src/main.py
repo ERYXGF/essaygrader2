@@ -28,7 +28,6 @@ from grading_cache import (
     classify,
     partition,
     merge_and_update,
-    history,
     campaign_of,
     stale_keys,
     stale_extractions,
@@ -44,6 +43,7 @@ from recruitment_list import (
     submitted_dates,
     submitted_for,
     campaign_of_application,
+    application_history,
     find_export,
     DEFAULT_LIST_DIR,
 )
@@ -464,9 +464,12 @@ def run_pipeline(
     _apply_embargoes(results, campaign, applications)
     _apply_submission_dates(results, applications)
 
-    # Every campaign, deliberately — this is the cross-FY view.
-    candidate_history = history(cache)
-    _apply_submission_dates(candidate_history, applications)
+    # The cross-FY view, built from the recruitment list rather than the
+    # cache: the List records every application there has ever been, so this
+    # survives a cache rebuild, which a cache-derived history would not.
+    candidate_history = application_history(
+        applications or [], {r.get("candidate_number") for r in results}
+    )
 
     # ============================================================
     # STEP 5 — REPORT GENERATION
