@@ -5,6 +5,11 @@ It is a CSV export of a Microsoft List, backed up nightly, and it holds one row
 per application **across all campaigns** — which is what makes the re-application
 embargo computable at all.
 
+It is read for one thing: **the submission date**. `role`, `outcome` and
+`successful` are carried alongside it for reporting, and nothing else in the
+export is interpreted. The file is opened read-only and never written to — every
+output of this pipeline goes to the Excel workbook.
+
 Why this file matters more than the PDFs
 ----------------------------------------
 The PDFs cannot tell us when a candidate applied. Their filesystem mtime is
@@ -75,7 +80,6 @@ class Application(NamedTuple):
     role: str
     outcome: str  # final decision where recorded: YES/NO/PENDING/APPROVED/...
     successful: str  # 'APPLICATION SUCCESSFUL' — the written-task sift result.
-    applied_before: str  # candidate's own answer: YES / NO / ''
 
 
 def _decode_sharepoint(name: str) -> str:
@@ -126,7 +130,6 @@ _CREATED = "created"
 _STAFF_NUMBER = "staffnumber"
 _ROLE = "positionappliedfor"
 _SUCCESSFUL = "applicationsuccessful"
-_APPLIED_BEFORE = "haveyouapplied"
 
 # Readable names for the error message, since the lookup keys are squashed.
 _COLUMN_LABELS = {_CREATED: "Created", _STAFF_NUMBER: "Staff Number"}
@@ -228,7 +231,7 @@ def load_report(path: Optional[Path] = None):
             return index[candidates[0]]
 
         positions = {key: locate(key) for key in
-                     (_CREATED, _STAFF_NUMBER, _ROLE, _SUCCESSFUL, _APPLIED_BEFORE)}
+                     (_CREATED, _STAFF_NUMBER, _ROLE, _SUCCESSFUL)}
         missing = [c for c in REQUIRED_COLUMNS if positions.get(c) is None]
         if missing:
             raise ValueError(
@@ -262,7 +265,6 @@ def load_report(path: Optional[Path] = None):
                     role=field(row, positions[_ROLE]),
                     outcome=field(row, outcome_position).upper(),
                     successful=field(row, positions[_SUCCESSFUL]).upper(),
-                    applied_before=field(row, positions[_APPLIED_BEFORE]).upper(),
                 )
             )
 

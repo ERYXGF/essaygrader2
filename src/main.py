@@ -39,12 +39,7 @@ from grading_cache import (
 )
 from plagiarism_checker import check_plagiarism, apply_plagiarism_overrides
 from recruitment_list import load_report as load_recruitment_list, DEFAULT_LIST_FILE
-from embargo import (
-    find_embargoes,
-    unverifiable,
-    describe as describe_embargo,
-    EMBARGO_MONTHS,
-)
+from embargo import find_embargoes, describe as describe_embargo, EMBARGO_MONTHS
 from report_writer import write_report
 
 
@@ -130,7 +125,6 @@ def _warn_stale_extractions(essays: list, cache: dict) -> None:
 
 NOT_CHECKED = "? embargo not checked — recruitment list missing"
 NOT_LISTED = "? not in recruitment list"
-UNVERIFIABLE = "? declared a previous application, but it predates the list"
 
 
 def _apply_embargoes(results: list, campaign: str, list_path) -> None:
@@ -161,35 +155,25 @@ def _apply_embargoes(results: list, campaign: str, list_path) -> None:
         print(f"   ⚠ {skipped} recruitment list row(s) skipped (no staff number or date)")
 
     embargoes = find_embargoes(applications, campaign)
-    undatable = unverifiable(applications, campaign)
     listed = {a.staff_number for a in applications}
 
-    flagged = unlisted = unknown = 0
+    flagged = unlisted = 0
     for result in results:
         number = str(result.get("candidate_number", ""))
         if number in embargoes:
             result["embargo"] = describe_embargo(embargoes[number])
             flagged += 1
-        elif number in undatable:
-            result["embargo"] = UNVERIFIABLE
-            unknown += 1
         elif number in listed:
             result["embargo"] = ""  # checked and clear
         else:
             result["embargo"] = NOT_LISTED
             unlisted += 1
 
-    clear = len(results) - flagged - unlisted - unknown
     print(
         f"   ✓ Embargo check ({EMBARGO_MONTHS} months, any role): "
-        f"{flagged} flagged, {clear} clear, "
-        f"{unknown} unverifiable, {unlisted} not in the list"
+        f"{flagged} flagged, {len(results) - flagged - unlisted} clear, "
+        f"{unlisted} not in the list"
     )
-    if unknown:
-        print(
-            f"     {unknown} candidate(s) declared a previous application that "
-            f"predates the list, so no date exists to measure six months from."
-        )
     if unlisted:
         print(
             "     Candidates absent from the list cannot be checked — the "

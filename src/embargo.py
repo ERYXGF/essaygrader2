@@ -102,33 +102,6 @@ def find_embargoes(
     return embargoes
 
 
-def unverifiable(applications: List[Application], campaign: str) -> set:
-    """Candidates who say they applied before, but whose earlier application
-    is not in the List.
-
-    The List begins partway through the organisation's recruitment history, so
-    an application predating it leaves no row. The form asks the candidate
-    directly, and their own YES is the only trace of it — 77 of the 148 FY26
-    candidates are in exactly this position.
-
-    Those candidates cannot be cleared by the embargo: there is nothing to
-    measure six months against. Reporting them as clear would be a false
-    negative of precisely the kind the embargo exists to catch, so they are
-    surfaced separately and a human checks them.
-    """
-    grouped = by_staff_number(applications)
-    flagged = set()
-    for staff_number, history in grouped.items():
-        current = [a for a in history if fy_for_date(a.submitted_at) == campaign]
-        if not current:
-            continue
-        if any(fy_for_date(a.submitted_at) < campaign for a in history):
-            continue  # their history is on record; the window rule can judge it
-        if any(a.applied_before == "YES" for a in current):
-            flagged.add(staff_number)
-    return flagged
-
-
 def describe(embargo: Embargo) -> str:
     """The report cell text for one embargo.
 
