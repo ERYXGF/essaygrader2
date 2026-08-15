@@ -442,6 +442,77 @@ class TestStaleExtractions(unittest.TestCase):
 
 
 # ------------------------------------------------------------
+# Campaign scoping: each recruitment year starts from scratch
+# ------------------------------------------------------------
+class TestCampaignScoping(unittest.TestCase):
+    def _graded(self, essays, campaign):
+        cache = gc._empty_cache()
+        graded = [(e, _result(e["candidate_number"], e["role"])) for e in essays]
+        gc.merge_and_update(
+            cache, essays, graded, gc.prompt_hash(PROMPT_A), "v1.0", campaign
+        )
+        return cache
+
+    def test_a_grade_records_the_campaign_it_was_produced_in(self):
+        cache = self._graded([_essay("1", "LTC", "aaa")], "FY27")
+        self.assertEqual(cache["candidates"]["1|LTC"]["campaign"], "FY27")
+        self.assertTrue(cache["candidates"]["1|LTC"]["graded_at"])
+
+    def test_entries_without_a_campaign_backfill_to_the_legacy_one(self):
+        """Grades predating the field were all produced during FY26."""
+        self.assertEqual(gc.campaign_of({}), gc.LEGACY_CAMPAIGN)
+        self.assertEqual(gc.campaign_of({"campaign": ""}), gc.LEGACY_CAMPAIGN)
+        self.assertEqual(gc.campaign_of({"campaign": "FY27"}), "FY27")
+
+    def test_report_contains_only_the_active_campaign(self):
+        cache = self._graded([_essay("1", "LTC", "aaa")], "FY26")
+        # A new year, a new candidate, the old one's PDF removed.
+        new = [_essay("2", "TRI", "bbb")]
+        results, plag = gc.merge_and_update(
+            cache, new, [(new[0], _result("2", "TRI"))],
+            gc.prompt_hash(PROMPT_A), "v1.0", "FY27",
+        )
+        self.assertEqual([r["candidate_number"] for r in results], ["2"])
+        # The plagiarism corpus is scoped too — last year's essays are not
+        # compared against this year's.
+        self.assertEqual([p["candidate_number"] for p in plag], ["2"])
+
+    def test_excluded_campaigns_are_kept_in_the_cache(self):
+        """Nothing is deleted — a past year's report can still be rebuilt."""
+        cache = self._graded([_essay("1", "LTC", "aaa")], "FY26")
+        new = [_essay("2", "TRI", "bbb")]
+        gc.merge_and_update(
+            cache, new, [(new[0], _result("2", "TRI"))],
+            gc.prompt_hash(PROMPT_A), "v1.0", "FY27",
+        )
+        self.assertIn("1|LTC", cache["candidates"])
+        self.assertEqual(cache["candidates"]["1|LTC"]["campaign"], "FY26")
+
+    def test_an_earlier_campaign_can_be_reported_again(self):
+        cache = self._graded([_essay("1", "LTC", "aaa")], "FY26")
+        results, _ = gc.merge_and_update(
+            cache, [], [], gc.prompt_hash(PROMPT_A), "v1.0", "FY26"
+        )
+        self.assertEqual([r["candidate_number"] for r in results], ["1"])
+
+    def test_reused_entry_keeps_its_original_campaign(self):
+        """A later run must not silently absorb last year's grades."""
+        essays = [_essay("1", "LTC", "aaa")]
+        cache = self._graded(essays, "FY26")
+        gc.merge_and_update(
+            cache, essays, [], gc.prompt_hash(PROMPT_A), "v1.0", "FY27"
+        )
+        self.assertEqual(cache["candidates"]["1|LTC"]["campaign"], "FY26")
+
+    def test_no_campaign_means_no_filtering(self):
+        cache = self._graded([_essay("1", "LTC", "aaa")], "FY26")
+        results, _ = gc.merge_and_update(
+            cache, [], [], gc.prompt_hash(PROMPT_A), "v1.0"
+        )
+        self.assertEqual(len(results), 1)
+
+
+# ------------------------------------------------------------
 # Rubric version parsing / legacy cache migration
 # ------------------------------------------------------------
 class TestRubricVersion(unittest.TestCase):

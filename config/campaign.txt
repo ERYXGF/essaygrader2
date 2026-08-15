@@ -1,0 +1,17 @@
+# The recruitment campaign this pipeline is currently working on.
+#
+# Financial years run 1 October to 30 September, and each is named for the
+# calendar year it ends in: 1 Oct 2025 - 30 Sep 2026 is FY26.
+#
+# Change this ONE line when the campaign turns over. Everything follows from it:
+# the report contains only this campaign's candidates, and plagiarism screening
+# compares only within it. Earlier campaigns stay in the grading cache untouched
+# and can be reported on with --fy FY26.
+#
+# Set it deliberately rather than by the calendar. Applications for the next FY
+# often arrive during September, while the current campaign is still live — so
+# switch when the new campaign genuinely starts, not on 1 October.
+#
+# Format: FY followed by two digits.
+
+FY26

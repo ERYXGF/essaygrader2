@@ -29,6 +29,7 @@ Design notes:
     legitimately apply for more than one role, exactly as pdf_loader dedups.
 """
 
+import datetime as dt
 import hashlib
 import json
 import os
@@ -84,6 +85,12 @@ def essay_hash(essay_text: str) -> str:
 def _cache_key(candidate_number: str, role: str) -> str:
     """JSON-safe key for the (candidate_number, role) pair."""
     return f"{candidate_number}|{role}"
+
+
+# The campaign that grades predate the `campaign` field belong to. Every grade
+# written before it existed was produced during FY26, so backfilling to this is
+# exact rather than a guess.
+LEGACY_CAMPAIGN = "FY26"
 
 
 # ============================================================
@@ -161,8 +168,23 @@ def save_cache(path: str, cache: Dict) -> None:
     os.replace(tmp, cache_file)
 
 
+def campaign_of(entry: Dict) -> str:
+    """The campaign an entry belongs to, defaulting for pre-campaign entries.
+
+    Grades written before campaigns existed all belong to FY26 — the campaign
+    live when the field was introduced — so this is an exact backfill, not a
+    guess. Keeping the default in one place stops it drifting.
+    """
+    return entry.get("campaign") or LEGACY_CAMPAIGN
+
+
 def _entry(
-    essay: Dict, result: Dict, prompt_sha256: str, version: str = ""
+    essay: Dict,
+    result: Dict,
+    prompt_sha256: str,
+    version: str = "",
+    campaign: str = "",
+    graded_at: str = "",
 ) -> Dict:
     """The stored shape of one cached grade.
 
@@ -183,6 +205,11 @@ def _entry(
         "essay_text": essay["essay_text"],
         "prompt_sha256": prompt_sha256,
         "rubric_version": version,
+        # Which recruitment campaign this grade belongs to, and when it was
+        # produced. Recorded at grade time because neither can be recovered
+        # afterwards — submission files carry no usable date.
+        "campaign": campaign or LEGACY_CAMPAIGN,
+        "graded_at": graded_at or dt.date.today().isoformat(),
         "result": result,
     }
 
@@ -193,6 +220,7 @@ def record_grade(
     result: Dict,
     current_prompt_hash: str,
     version: str = "",
+    campaign: str = "",
 ) -> None:
     """Records one freshly graded essay so it survives an interrupted run.
 
@@ -201,7 +229,7 @@ def record_grade(
     """
     cache["prompt_sha256"] = current_prompt_hash
     cache["candidates"][_cache_key(essay["candidate_number"], essay["role"])] = _entry(
-        essay, result, current_prompt_hash, version
+        essay, result, current_prompt_hash, version, campaign
     )
 
 
@@ -349,8 +377,9 @@ def merge_and_update(
     graded: List[Tuple[Dict, Dict]],
     current_prompt_hash: str,
     version: str = "",
+    campaign: str = "",
 ) -> Tuple[List[Dict], List[Dict]]:
-    """Folds freshly graded results into the cache and returns the full set.
+    """Folds freshly graded results into the cache and returns the current set.
 
     Parameters
     ----------
@@ -358,15 +387,20 @@ def merge_and_update(
     essays : every essay loaded from the folder this run.
     graded : (essay, result) pairs for the essays graded this run.
     current_prompt_hash : hash of the rubric used for this run.
+    campaign : the recruitment campaign to report on. Entries from earlier
+        campaigns stay in the cache but are left out of both returned lists —
+        each campaign starts from scratch, and cache-only entries are exactly
+        how last year's candidates would otherwise haunt this year's report.
+        Empty means no filtering (every campaign included).
 
     Returns
     -------
     (all_results, plagiarism_essays)
-        all_results       : one result per candidate — folder essays first (in
-                            load order), then any cache-only entries whose PDF
-                            is no longer in the folder.
+        all_results       : one result per candidate in the campaign — folder
+                            essays first (in load order), then any cache-only
+                            entries whose PDF is no longer in the folder.
         plagiarism_essays : matching essay dicts (with text) for the same set,
-                            so the plagiarism screen sees the full corpus.
+                            so the screen compares within the campaign only.
     """
     cache["prompt_sha256"] = current_prompt_hash
     candidates = cache["candidates"]
@@ -382,14 +416,20 @@ def merge_and_update(
         if key in graded_by_key:
             result = graded_by_key[key][1]
             entry_hash, entry_version = current_prompt_hash, version
+            # A grade produced this run belongs to this run's campaign.
+            entry_campaign = campaign or LEGACY_CAMPAIGN
+            entry_graded_at = ""  # _entry stamps today
         elif key in candidates:
             result = candidates[key]["result"]  # reused unchanged
             # Keep the hash this grade was actually produced under. A
             # role-scoped run must not silently promote out-of-scope rows to
             # the current rubric — that is exactly the lie the per-entry hash
-            # exists to prevent.
+            # exists to prevent. The campaign and date are the grade's
+            # provenance too, so they are preserved for the same reason.
             entry_hash = candidates[key].get("prompt_sha256", "")
             entry_version = candidates[key].get("rubric_version", "")
+            entry_campaign = campaign_of(candidates[key])
+            entry_graded_at = candidates[key].get("graded_at", "")
         else:
             continue  # shouldn't happen: every folder essay is graded or cached
 
@@ -400,14 +440,28 @@ def merge_and_update(
         if "format_label" in essay:
             result = {**result, "format_label": essay["format_label"]}
 
-        candidates[key] = _entry(essay, result, entry_hash, entry_version)
+        candidates[key] = _entry(
+            essay, result, entry_hash, entry_version,
+            entry_campaign, entry_graded_at,
+        )
 
     folder_keys = [
         _cache_key(e["candidate_number"], e["role"]) for e in essays
     ]
+    # An essay in the folder with no cache entry has no grade to report. That
+    # happens on a --report-only rebuild when a new PDF has been added but not
+    # yet graded; without this it would raise a KeyError below.
+    folder_keys = [k for k in folder_keys if k in candidates]
     folder_key_set = set(folder_keys)
     # Cache-only entries: previously graded candidates whose PDF was removed.
     extra_keys = [k for k in candidates if k not in folder_key_set]
+
+    # Each campaign starts from scratch. Earlier campaigns stay in the cache —
+    # nothing is deleted, and --fy can still report on them — but they are left
+    # out of this run's results and out of the plagiarism corpus.
+    if campaign:
+        folder_keys = [k for k in folder_keys if campaign_of(candidates[k]) == campaign]
+        extra_keys = [k for k in extra_keys if campaign_of(candidates[k]) == campaign]
 
     all_results: List[Dict] = []
     plagiarism_essays: List[Dict] = []

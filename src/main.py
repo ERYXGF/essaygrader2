@@ -16,6 +16,7 @@ import argparse
 from pathlib import Path
 from typing import Optional, Set
 
+from campaign import active_campaign, fy_for_date, looks_stale
 from pdf_loader import load_essays
 from essay_grader import grade_essays, DEFAULT_MODEL, _load_grading_prompt
 from grading_cache import (
@@ -27,10 +28,13 @@ from grading_cache import (
     classify,
     partition,
     merge_and_update,
+    campaign_of,
     stale_keys,
     stale_extractions,
     GRADE_REASONS,
     REASON_CHANGED,
+    REASON_NEW,
+    REASON_REEXTRACTED,
     REASON_LABELS,
 )
 from plagiarism_checker import check_plagiarism, apply_plagiarism_overrides
@@ -38,7 +42,8 @@ from report_writer import write_report
 
 
 def _report_dry_run(
-    essays: list, cache: dict, current_prompt_hash: str, version: str, roles
+    essays: list, cache: dict, current_prompt_hash: str, version: str, roles,
+    campaign: str = "",
 ) -> None:
     """Prints what a real run would grade, and why, without grading anything.
 
@@ -54,6 +59,15 @@ def _report_dry_run(
     print()
     print("🔎 Dry run — nothing will be graded, no API calls made")
     print(f"   Rubric: {version or '(unversioned)'}")
+    if campaign:
+        other = sum(
+            1 for e in cache.get("candidates", {}).values()
+            if campaign_of(e) != campaign
+        )
+        print(f"   Campaign: {campaign}" + (
+            f" ({other} cached grade(s) from earlier campaigns excluded)"
+            if other else ""
+        ))
     if roles is not None:
         print(f"   Regrade scoped to: {', '.join(sorted(roles))}")
     print()
@@ -107,7 +121,12 @@ def _warn_stale_extractions(essays: list, cache: dict) -> None:
         print(f"      ... and {len(drifted) - 10} more")
 
 
-def run_pipeline(roles: Optional[Set[str]] = None, dry_run: bool = False) -> None:
+def run_pipeline(
+    roles: Optional[Set[str]] = None,
+    dry_run: bool = False,
+    report_only: bool = False,
+    fy: Optional[str] = None,
+) -> None:
     # ============================================================
     # PATHS  (project root = parent of src/)
     # ============================================================
@@ -122,6 +141,18 @@ def run_pipeline(roles: Optional[Set[str]] = None, dry_run: bool = False) -> Non
     cache_file = output_dir / "grading_cache.json"
 
     print("🚀 Pipeline starting...")
+
+    # The campaign governs what lands in the report, so state it every run —
+    # this banner is the safeguard against the setting being silently wrong.
+    override = (fy or "").strip().upper()
+    campaign = override or active_campaign()
+    source = "--fy" if override else "config/campaign.txt"
+    print(f"📅 Campaign: {campaign}   (from {source})")
+    if looks_stale(campaign):
+        print(
+            f"   ⚠ Today falls in {fy_for_date()}, but the campaign is set to "
+            f"{campaign}. Edit config/campaign.txt when the new campaign starts."
+        )
 
     # ============================================================
     # STEP 1 — LOAD ESSAYS FROM PDFs
@@ -146,14 +177,44 @@ def run_pipeline(roles: Optional[Set[str]] = None, dry_run: bool = False) -> Non
     # still loaded above, because extraction is what produces the hashes the
     # report is about.
     if dry_run:
-        _report_dry_run(essays, cache, current_prompt_hash, version, roles)
+        _report_dry_run(
+            essays, cache, current_prompt_hash, version, roles, campaign
+        )
         return
 
-    to_grade, reused = partition(essays, cache, current_prompt_hash, roles)
-    print(
-        f"🗃️  Reusing {len(reused)} cached grade(s); "
-        f"grading {len(to_grade)} new/changed essay(s)"
-    )
+    if report_only:
+        # Rebuild the workbook from what is already cached. Skips grading
+        # entirely — the point is to pick up report changes without paying to
+        # regrade answers whose criteria have not changed.
+        print(
+            "📄 Report-only: rebuilding from cached grades. Nothing is graded; "
+            "the plagiarism screen still runs (a few calls at most)."
+        )
+        to_grade, reused = [], []
+        # An essay with no usable grade cannot appear in a report built from
+        # the cache. Only a missing or superseded grade counts here — a grade
+        # under an older rubric is exactly what this mode is for reusing, so
+        # it is not "ungraded".
+        ungraded = [
+            essay
+            for essay, reason in classify(essays, cache, current_prompt_hash, roles)
+            if reason in (REASON_NEW, REASON_CHANGED, REASON_REEXTRACTED)
+        ]
+        if ungraded:
+            print(
+                f"   ⚠ {len(ungraded)} essay(s) have no usable grade and are "
+                f"left out of the report. Run without --report-only to grade them:"
+            )
+            for essay in ungraded[:10]:
+                print(f"      {essay['candidate_number']}|{essay['role']}")
+            if len(ungraded) > 10:
+                print(f"      ... and {len(ungraded) - 10} more")
+    else:
+        to_grade, reused = partition(essays, cache, current_prompt_hash, roles)
+        print(
+            f"🗃️  Reusing {len(reused)} cached grade(s); "
+            f"grading {len(to_grade)} new/changed essay(s)"
+        )
     _warn_stale_extractions(essays, cache)
     if roles is not None:
         # A scoped run must say plainly what it left behind, or a reviewer has
@@ -173,7 +234,9 @@ def run_pipeline(roles: Optional[Set[str]] = None, dry_run: bool = False) -> Non
             A full cold run takes hours; without this, one rate-limit error
             near the end would throw away every grade before it.
             """
-            record_grade(cache, essay, result, current_prompt_hash, version)
+            record_grade(
+                cache, essay, result, current_prompt_hash, version, campaign
+            )
             save_cache(str(cache_file), cache)
 
         new_results = grade_essays(to_grade, on_result=_persist)
@@ -183,9 +246,17 @@ def run_pipeline(roles: Optional[Set[str]] = None, dry_run: bool = False) -> Non
 
     graded = list(zip(to_grade, new_results))
     results, plagiarism_essays = merge_and_update(
-        cache, essays, graded, current_prompt_hash, version
+        cache, essays, graded, current_prompt_hash, version, campaign
     )
     save_cache(str(cache_file), cache)
+
+    excluded = len(cache["candidates"]) - len(results)
+    if excluded > 0:
+        # A short report is otherwise alarming; say why it is short.
+        print(
+            f"   ℹ {excluded} grade(s) from earlier campaigns excluded "
+            f"(still in the cache; report them with --fy)"
+        )
 
     if not results:
         raise ValueError("No results available (no essays graded or cached)")
@@ -237,6 +308,25 @@ def _parse_args(argv=None) -> argparse.Namespace:
             "will cost."
         ),
     )
+    parser.add_argument(
+        "--report-only",
+        action="store_true",
+        help=(
+            "Rebuild the Excel report from cached grades without grading "
+            "anything. Use to pick up report changes without paying to regrade "
+            "answers whose criteria have not changed. Still runs the plagiarism "
+            "screen, which the Similarity sheet needs."
+        ),
+    )
+    parser.add_argument(
+        "--fy",
+        default=None,
+        help=(
+            "Report on a specific campaign, e.g. FY26, overriding "
+            "config/campaign.txt for this run. Earlier campaigns stay in the "
+            "cache, so a past year's report can be regenerated at any time."
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -247,4 +337,9 @@ if __name__ == "__main__":
         if args.roles
         else None
     )
-    run_pipeline(roles=selected, dry_run=args.dry_run)
+    run_pipeline(
+        roles=selected,
+        dry_run=args.dry_run,
+        report_only=args.report_only,
+        fy=args.fy,
+    )

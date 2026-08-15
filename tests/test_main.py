@@ -120,6 +120,63 @@ class TestDryRun(unittest.TestCase):
         self.assertIn("Regrade scoped to: TRI", output)
 
 
+class TestReportOnly(unittest.TestCase):
+    """--report-only must never grade; that is the entire reason it exists."""
+
+    def _run(self, essays, cache_data=None, **kwargs):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            (base / "input" / "essays").mkdir(parents=True)
+            (base / "output").mkdir(parents=True)
+            if cache_data is not None:
+                gc.save_cache(str(base / "output" / "grading_cache.json"), cache_data)
+
+            buffer = io.StringIO()
+            with mock.patch.object(main, "load_essays", return_value=essays), \
+                 mock.patch.object(main, "__file__", str(base / "src" / "main.py")), \
+                 mock.patch.object(
+                     main, "grade_essays",
+                     side_effect=_Tripwire("report-only must not grade"),
+                 ), \
+                 mock.patch.object(main, "check_plagiarism", return_value=[]), \
+                 mock.patch.object(main, "apply_plagiarism_overrides"), \
+                 mock.patch.object(main, "write_report"):
+                with redirect_stdout(buffer):
+                    main.run_pipeline(report_only=True, **kwargs)
+            return buffer.getvalue()
+
+    def _seeded(self):
+        """A cache holding one FY26 grade, and the matching essay list."""
+        cache = gc._empty_cache()
+        essays = [_essay("1", "LTC", "aaa", file_hash="F1")]
+        gc.merge_and_update(
+            cache, essays, [(essays[0], {"candidate_number": "1"})],
+            "HASH", "v1.0", "FY26",
+        )
+        return cache, essays
+
+    def test_rebuilds_without_grading(self):
+        cache, essays = self._seeded()
+        output = self._run(essays, cache_data=cache, fy="FY26")
+        self.assertIn("Report-only", output)
+        self.assertIn("Campaign: FY26", output)
+
+    def test_campaign_banner_names_its_source(self):
+        cache, essays = self._seeded()
+        output = self._run(essays, cache_data=cache, fy="FY26")
+        self.assertIn("--fy", output)
+
+    def test_ungraded_essays_are_reported_as_left_out(self):
+        """A new PDF cannot appear in a report built from the cache."""
+        cache, essays = self._seeded()
+        with_new = essays + [_essay("2", "TRI", "brand new", file_hash="F2")]
+        output = self._run(with_new, cache_data=cache, fy="FY26")
+        self.assertIn("have no usable grade and are left out", output)
+        # Named individually, so the reviewer knows which rows are missing
+        # rather than only how many.
+        self.assertIn("2|TRI", output)
+
+
 class TestArgParsing(unittest.TestCase):
     def test_dry_run_defaults_off(self):
         self.assertFalse(main._parse_args([]).dry_run)
@@ -131,6 +188,16 @@ class TestArgParsing(unittest.TestCase):
         args = main._parse_args(["--roles", "TRI", "--dry-run"])
         self.assertEqual(args.roles, "TRI")
         self.assertTrue(args.dry_run)
+
+    def test_report_only_and_fy_default_off(self):
+        args = main._parse_args([])
+        self.assertFalse(args.report_only)
+        self.assertIsNone(args.fy)
+
+    def test_report_only_and_fy_parse(self):
+        args = main._parse_args(["--report-only", "--fy", "FY26"])
+        self.assertTrue(args.report_only)
+        self.assertEqual(args.fy, "FY26")
 
 
 if __name__ == "__main__":
