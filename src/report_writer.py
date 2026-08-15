@@ -33,6 +33,8 @@ from typing import List, Dict, Optional
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment
 
+from campaign import year_of
+
 # Submission dates are written as real dates so Excel sorts and filters them
 # chronologically; this is only how they are displayed.
 DATE_FORMAT = "DD MMM YYYY"
@@ -50,6 +52,7 @@ def write_report(
     output_path: str,
     similarity_pairs: Optional[List[Dict]] = None,
     history: Optional[List[Dict]] = None,
+    campaign: str = "",
 ) -> None:
     """Writes the grading results to an .xlsx file at output_path.
 
@@ -60,6 +63,10 @@ def write_report(
 
     history is grading_cache.history() — every graded submission across all
     campaigns. Pass None to skip the History sheet.
+
+    campaign is this run's campaign ('FY26'). It stamps the Similarity
+    sheet, whose rows are pairs and so carry no campaign of their own —
+    sound because the screen only ever compares within one campaign.
     """
     if not results:
         raise ValueError("No results provided to write report")
@@ -93,7 +100,7 @@ def write_report(
     summary_headers = [
         "Candidate Number",
         "Role",
-        "Campaign",
+        "Financial Year",
         "Submitted",
         "Double Application",
         "Embargo",
@@ -123,7 +130,7 @@ def write_report(
         values = [
             r.get("candidate_number", "Unknown"),
             r.get("Role", "Unknown"),
-            r.get("campaign", ""),
+            year_of(r.get("campaign", "")),
             r.get("submitted", ""),
             "Yes" if r.get("candidate_number") in double_applicants else "No",
             r.get("embargo", ""),
@@ -207,6 +214,7 @@ def write_report(
 
     detail_headers = [
         "Candidate Number",
+        "Financial Year",
         "Source File",
         "Strengths",
         "Weaknesses",
@@ -228,6 +236,7 @@ def write_report(
 
         values = [
             r.get("candidate_number", "Unknown"),
+            year_of(r.get("campaign", "")),
             r.get("source_file", ""),
             ", ".join(strengths),
             ", ".join(weaknesses),
@@ -249,7 +258,9 @@ def write_report(
     # SHEET 3 — SIMILARITY (one row per flagged essay pair)
     # ============================================================
     if similarity_pairs is not None:
-        _write_similarity_sheet(wb, similarity_pairs, header_font, red, yellow)
+        _write_similarity_sheet(
+            wb, similarity_pairs, header_font, red, yellow, campaign
+        )
 
     # ============================================================
     # SHEET 4 — HISTORY (candidates who appear in more than one campaign)
@@ -344,7 +355,7 @@ def _write_history_sheet(
 
     headers = [
         "Candidate Number",
-        "Campaign",
+        "Financial Year",
         "Role",
         "Submitted",
         "Classification",
@@ -375,7 +386,7 @@ def _write_history_sheet(
     for row_idx, row in enumerate(returning, start=2):
         values = [
             row.get("candidate_number", ""),
-            row.get("campaign", ""),
+            year_of(row.get("campaign", "")),
             row.get("role", ""),
             row.get("submitted", ""),
             row.get("classification", ""),
@@ -393,6 +404,7 @@ def _write_similarity_sheet(
     header_font: Font,
     red: PatternFill,
     yellow: PatternFill,
+    campaign: str = "",
 ) -> None:
     """Writes the per-pair plagiarism evidence sheet.
 
@@ -405,6 +417,7 @@ def _write_similarity_sheet(
     headers = [
         "Candidate A",
         "Candidate B",
+        "Financial Year",
         "Lexical %",
         "Semantic %",
         "Risk",
@@ -430,6 +443,7 @@ def _write_similarity_sheet(
         values = [
             p.get("candidate_a", ""),
             p.get("candidate_b", ""),
+            year_of(campaign),
             p.get("lexical_pct", ""),
             p.get("semantic_pct", ""),
             p.get("risk", ""),
@@ -439,10 +453,10 @@ def _write_similarity_sheet(
         ]
         for col, val in enumerate(values, 1):
             cell = ws.cell(row=row_idx, column=col, value=val)
-            if col >= 7:  # evidence + explanation are long-form text
+            if col >= 8:  # evidence + explanation are long-form text
                 cell.alignment = Alignment(vertical="top", wrap_text=True)
 
-        risk_cell = ws.cell(row=row_idx, column=5)
+        risk_cell = ws.cell(row=row_idx, column=headers.index("Risk") + 1)
         if p.get("risk") == "High":
             risk_cell.fill = red
         elif p.get("risk") == "Medium":

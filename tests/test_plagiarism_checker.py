@@ -294,9 +294,14 @@ class TestReportWriter(unittest.TestCase):
             self.assertIsNone(ws1.cell(row=4, column=flag_col).value)  # clean row empty
 
             ws3 = wb["Similarity"]
-            self.assertEqual(ws3.cell(row=2, column=1).value, "111")
-            self.assertEqual(ws3.cell(row=2, column=5).value, "High")
-            self.assertIn("shared passage", ws3.cell(row=2, column=7).value)
+            # Located by header name: inserting a column ahead of these
+            # used to silently move what the test was checking.
+            sim = [c.value for c in ws3[1]]
+            def cell(name):
+                return ws3.cell(row=2, column=sim.index(name) + 1).value
+            self.assertEqual(cell("Candidate A"), "111")
+            self.assertEqual(cell("Risk"), "High")
+            self.assertIn("shared passage", cell("Shared Evidence"))
 
     def test_report_without_pairs_is_backward_compatible(self):
         import tempfile, os

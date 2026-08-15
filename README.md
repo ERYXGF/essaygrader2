@@ -25,8 +25,8 @@ version with anonymisation, see `../essaygrader/`.
 6. Writes a four-sheet Excel report to
    `output/ai_essay_grading_report_<campaign>.xlsx` — one file per campaign,
    so running FY26 never overwrites FY27's report
-   - **Summary**: one row per candidate — `Campaign`, `Submitted` (the real
-     submission date), `Double Application`, `Embargo`, classification
+   - **Summary**: one row per candidate — `Financial Year`, `Submitted` (the
+     real submission date), `Double Application`, `Embargo`, classification
      colour-coded, the cross-cutting scores, `File Format`, `Rubric Version`,
      and a colour-coded `Plagiarism Flag` column (empty when clean)
    - **Detailed**: strengths, weaknesses, rationale, AI risk indicators, and a
@@ -37,6 +37,12 @@ version with anonymisation, see `../essaygrader/`.
    - **History**: every application by a candidate who appears in more than one
      campaign. The only sheet that crosses campaign boundaries, so a returning
      candidate's earlier grades sit beside the current one
+
+**Every sheet carries `Financial Year`** — as the number `2026`, matching the
+recruitment List's own `FINANCIALYEAR` field. Once the List holds more than one
+campaign, a staff number alone is no longer unique, so downstream automation
+joins on **staff number + financial year**; the column is spelled and typed the
+same on both sides so that join needs no translation.
 
 The report includes three empty columns (`Human Override`, `Override Reason`,
 `Reviewed`) for the reviewer to fill in. These are wired in early to support

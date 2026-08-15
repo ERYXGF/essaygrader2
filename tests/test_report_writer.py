@@ -134,6 +134,15 @@ class TestDetailedSheet(unittest.TestCase):
         self.assertEqual(headers[-3:], ["Q1 Summary", "Q2 Summary", "Q3 Summary"])
         self.assertEqual(rows[1][-3:], ["slats guidance", "sbt design", "most challenging"])
 
+    def test_financial_year_is_on_the_detailed_sheet_too(self):
+        """A Detailed row must be tie-able to a campaign on its own, or it
+        cannot be joined once the List holds more than one year."""
+        result = _result("100001", "TRI", [])
+        result["campaign"] = "FY26"
+        rows = self._write_and_read([result])
+        self.assertEqual(rows[0][:2], ["Candidate Number", "Financial Year"])
+        self.assertEqual(rows[1][1], 2026)
+
     def test_error_row_writes_blanks_rather_than_raising(self):
         error_row = eg._error_result("100002", "TRI", "Empty essay submission")
         rows = self._write_and_read([error_row])
@@ -175,6 +184,41 @@ class TestDoubleApplication(unittest.TestCase):
         self.assertEqual(numbers, set())
 
 
+class TestSimilarityFinancialYear(unittest.TestCase):
+    """Pairs carry no campaign of their own; the sheet is stamped with the
+    run's, which is sound because the screen never crosses campaigns."""
+
+    def _similarity(self, campaign):
+        pair = {
+            "candidate_a": "111", "candidate_b": "222",
+            "lexical_pct": 80.0, "semantic_pct": 90.0, "risk": "High",
+            "claude_verdict": "copied", "shared_evidence": ["a passage"],
+            "claude_explanation": "why",
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "report.xlsx"
+            rw.write_report(
+                [_result("1", "TRI", [])], str(path),
+                similarity_pairs=[pair], campaign=campaign,
+            )
+            ws = load_workbook(path)["Similarity"]
+            return [[c.value for c in row] for row in ws.iter_rows()]
+
+    def test_the_pair_row_carries_the_year(self):
+        rows = self._similarity("FY26")
+        self.assertEqual(rows[0][2], "Financial Year")
+        self.assertEqual(rows[1][2], 2026)
+
+    def test_risk_banding_survived_the_inserted_column(self):
+        """Regression: Risk used to be located at a hard-coded column 5."""
+        rows = self._similarity("FY26")
+        self.assertEqual(rows[1][rows[0].index("Risk")], "High")
+
+    def test_no_campaign_leaves_the_cell_blank(self):
+        rows = self._similarity("")
+        self.assertIsNone(rows[1][2])
+
+
 class TestHistorySheet(unittest.TestCase):
     """The one sheet that crosses campaign boundaries."""
 
@@ -200,8 +244,11 @@ class TestHistorySheet(unittest.TestCase):
             self._row("872524", "FY26", "TRI", "Priority Interview"),
             self._row("872524", "FY27", "LTC", "Maybe"),
         ])
-        self.assertEqual(rows[0][:3], ["Candidate Number", "Campaign", "Role"])
-        self.assertEqual([r[1] for r in rows[1:]], ["FY26", "FY27"])
+        self.assertEqual(
+            rows[0][:3], ["Candidate Number", "Financial Year", "Role"]
+        )
+        # Shown as the number the Power Automate flows join on.
+        self.assertEqual([r[1] for r in rows[1:]], [2026, 2027])
         self.assertEqual([r[4] for r in rows[1:]], ["Priority Interview", "Maybe"])
 
     def test_a_single_campaign_candidate_is_omitted(self):
@@ -213,6 +260,15 @@ class TestHistorySheet(unittest.TestCase):
             self._row("111111", "FY26"),
         ])
         self.assertEqual({r[0] for r in rows[1:]}, {"872524"})
+
+    def test_grouping_still_uses_the_campaign_not_the_displayed_year(self):
+        """The number is presentation only. If the display change had leaked
+        into the grouping, this candidate would stop being 'returning'."""
+        rows = self._history([
+            self._row("872524", "FY26"),
+            self._row("872524", "FY27"),
+        ])
+        self.assertEqual([r[1] for r in rows[1:]], [2026, 2027])
 
     def test_nobody_returning_says_so_rather_than_looking_broken(self):
         rows = self._history([self._row("111111", "FY26")])
@@ -254,7 +310,11 @@ class TestSummarySheet(unittest.TestCase):
         row["campaign"] = "FY26"
         row["submitted"] = dt.date(2026, 7, 28)
         headers, rows, _ = self._summary([row])
-        self.assertEqual(rows[0][headers.index("Campaign")], "FY26")
+        # The flows match on this, so it must be 2026 the number — not
+        # "FY26", and not the string "2026".
+        year = rows[0][headers.index("Financial Year")]
+        self.assertEqual(year, 2026)
+        self.assertIsInstance(year, int)
         # A real date, not text: Excel must sort it chronologically.
         self.assertEqual(rows[0][headers.index("Submitted")], dt.datetime(2026, 7, 28))
 

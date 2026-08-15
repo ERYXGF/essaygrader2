@@ -47,6 +47,26 @@ def fy_for_date(date: Optional[dt.date] = None) -> str:
     return f"FY{year % 100:02d}"
 
 
+def year_of(campaign: str) -> Optional[int]:
+    """The calendar year a campaign label names: 'FY26' -> 2026.
+
+    The report shows the year as a number because the Power Automate flows join
+    the workbook to the recruitment List on staff number **and** financial year,
+    and the List records that year as 2026. Matching the List's own spelling
+    keeps the join key identical on both sides.
+
+    Returns None when the label cannot be read, so the cell is left blank. A
+    fabricated year would be worse than an empty one: it would join silently to
+    the wrong campaign rather than failing where someone would notice.
+    """
+    digits = re.sub(r"\D", "", campaign or "")
+    if len(digits) == 2:
+        return 2000 + int(digits)
+    if len(digits) == 4:
+        return int(digits)
+    return None
+
+
 def active_campaign(path: Optional[Path] = None) -> str:
     """The campaign this run belongs to, from config/campaign.txt.
 

@@ -477,6 +477,7 @@ def run_pipeline(
         output_path=str(report_file),
         similarity_pairs=similarity_pairs,
         history=candidate_history,
+        campaign=campaign,
     )
 
     # ============================================================

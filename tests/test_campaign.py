@@ -112,5 +112,34 @@ class TestLooksStale(unittest.TestCase):
         self.assertFalse(cp.looks_stale("FY27", dt.date(2026, 9, 15)))
 
 
+class TestYearOf(unittest.TestCase):
+    """The report shows the year as a number, because that is what the Power
+    Automate flows join to the recruitment List on."""
+
+    def test_a_campaign_label_becomes_its_year(self):
+        self.assertEqual(cp.year_of("FY26"), 2026)
+        self.assertEqual(cp.year_of("FY27"), 2027)
+
+    def test_a_four_digit_year_is_accepted_as_is(self):
+        self.assertEqual(cp.year_of("2026"), 2026)
+
+    def test_labels_with_no_year_in_them_give_nothing(self):
+        """A fabricated year would join silently to the wrong campaign — worse
+        than a blank cell, which fails where somebody notices."""
+        for value in ("", None, "FY", "unknown"):
+            self.assertIsNone(cp.year_of(value), value)
+
+    def test_a_stray_suffix_does_not_lose_an_unambiguous_year(self):
+        """Lenient on purpose, and identically to
+        recruitment_list.parse_financial_year: the digits are the year, and
+        refusing to read them would blank the column over a cosmetic typo."""
+        self.assertEqual(cp.year_of("FY2026X"), 2026)
+
+    def test_it_round_trips_with_fy_for_date(self):
+        self.assertEqual(
+            cp.year_of(cp.fy_for_date(dt.date(2026, 8, 15))), 2026
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
