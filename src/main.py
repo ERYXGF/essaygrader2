@@ -43,6 +43,7 @@ from recruitment_list import (
     load_report as load_recruitment_list,
     submitted_dates,
     submitted_for,
+    campaign_of_application,
     find_export,
     DEFAULT_LIST_DIR,
 )
@@ -160,6 +161,66 @@ def _load_applications(list_path) -> Optional[list]:
     return applications
 
 
+def _check_campaign_membership(
+    essays: list, campaign: str, applications: Optional[list]
+) -> tuple:
+    """Splits essays into those belonging to this campaign and those that don't.
+
+    The campaign is declared in config/campaign.txt, never read off the files,
+    but every PDF in input/essays/ is loaded regardless. Run --fy FY26 with last
+    year's folder still full of FY27 submissions and every one of them looks
+    like a new FY26 candidate: graded at full price, filed under the wrong
+    campaign, and thereafter appearing in History as a returning applicant.
+
+    The export says which campaign each application belongs to, so that mistake
+    is checkable rather than merely regrettable. Candidates absent from the
+    export are kept — absence is not evidence — and so is everything when there
+    is no export at all.
+
+    Returns (kept, excluded); excluded entries carry the campaign they really
+    belong to.
+    """
+    if not applications:
+        return essays, []
+
+    campaigns_by_staff = {}
+    for application in applications:
+        campaigns_by_staff.setdefault(application.staff_number, set()).add(
+            campaign_of_application(application)
+        )
+
+    kept, excluded = [], []
+    for essay in essays:
+        found = campaigns_by_staff.get(str(essay.get("candidate_number", "")))
+        if not found or campaign in found:
+            kept.append(essay)
+        else:
+            excluded.append((essay, sorted(found)))
+    return kept, excluded
+
+
+def _report_excluded(excluded: list, campaign: str) -> None:
+    """Names every essay left out because it belongs to another campaign."""
+    if not excluded:
+        return
+    print(
+        f"   ⚠ {len(excluded)} essay(s) in the folder belong to another "
+        f"campaign, not {campaign}, and are left out of this run:"
+    )
+    for essay, found in excluded[:10]:
+        print(
+            f"      {essay['candidate_number']}|{essay['role']} "
+            f"→ {', '.join(found)}"
+        )
+    if len(excluded) > 10:
+        print(f"      ... and {len(excluded) - 10} more")
+    print(
+        f"      Grading them would file them under {campaign} and cost a call "
+        f"each. Move them out of input/essays/, or run the campaign they "
+        f"belong to."
+    )
+
+
 def _apply_submission_dates(rows: list, applications: Optional[list]) -> None:
     """Annotates rows with the date their application arrived, in place.
 
@@ -243,7 +304,6 @@ def run_pipeline(
     output_dir = base_dir / "output"
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    report_file = output_dir / "ai_essay_grading_report.xlsx"
     cache_file = output_dir / "grading_cache.json"
 
     print("🚀 Pipeline starting...")
@@ -260,12 +320,24 @@ def run_pipeline(
             f"{campaign}. Edit config/campaign.txt when the new campaign starts."
         )
 
+    # One report per campaign, so running FY26 does not overwrite FY27's.
+    report_file = output_dir / f"ai_essay_grading_report_{campaign}.xlsx"
+
     # ============================================================
     # STEP 1 — LOAD ESSAYS FROM PDFs
     # ============================================================
     print(f"📄 Loading essays from {essays_dir}...")
     essays = load_essays(str(essays_dir))
     print(f"   ✓ Loaded {len(essays)} essay(s)")
+
+    # The recruitment list is read once here and serves everything that needs
+    # it: this guard, the embargo, the Submitted column and the History sheet.
+    applications = _load_applications(recruitment_list)
+
+    # Leave out submissions belonging to another campaign, before anything is
+    # classified or graded. The folder is not campaign-aware; the export is.
+    essays, excluded = _check_campaign_membership(essays, campaign, applications)
+    _report_excluded(excluded, campaign)
 
     # ============================================================
     # STEP 2 — CLAUDE GRADING (incremental — cached grades reused)
@@ -360,11 +432,11 @@ def run_pipeline(
     )
     save_cache(str(cache_file), cache)
 
-    excluded = len(cache["candidates"]) - len(results)
-    if excluded > 0:
+    other_campaigns = len(cache["candidates"]) - len(results)
+    if other_campaigns > 0:
         # A short report is otherwise alarming; say why it is short.
         print(
-            f"   ℹ {excluded} grade(s) from earlier campaigns excluded "
+            f"   ℹ {other_campaigns} grade(s) from earlier campaigns excluded "
             f"(still in the cache; report them with --fy)"
         )
 
@@ -386,10 +458,9 @@ def run_pipeline(
     # STEP 4 — RE-APPLICATION EMBARGO AND SUBMISSION DATES
     # ============================================================
     # Reported, never enforced: the row is graded and written either way, and a
-    # human decides what the flag is worth. The recruitment list is read once
-    # here and serves the embargo, the Submitted column and the History sheet.
+    # human decides what the flag is worth. Reuses the applications loaded at
+    # the top of the run.
     print("📋 Checking the re-application embargo...")
-    applications = _load_applications(recruitment_list)
     _apply_embargoes(results, campaign, applications)
     _apply_submission_dates(results, applications)
 

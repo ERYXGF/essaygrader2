@@ -244,6 +244,62 @@ class TestEmbargoWiring(unittest.TestCase):
         self.assertEqual(len(results), 2)
 
 
+class TestCampaignMembershipGuard(unittest.TestCase):
+    """Stops a run grading another campaign's essays under this campaign's name.
+
+    The folder is not campaign-aware; the export is. Without this, running
+    --fy FY26 with FY27 PDFs still in input/essays/ grades all of them at full
+    price and files them as FY26 candidates.
+    """
+
+    def _app(self, staff, year, date="2026-07-28"):
+        import datetime as dt
+        import recruitment_list as rl
+        return rl.Application(
+            staff, dt.date.fromisoformat(date), "TRI", "", "", year
+        )
+
+    def test_essays_from_another_campaign_are_excluded(self):
+        essays = [_essay("1", "TRI", "aaa"), _essay("2", "TRI", "bbb")]
+        apps = [self._app("1", "FY26"), self._app("2", "FY27")]
+        kept, excluded = main._check_campaign_membership(essays, "FY26", apps)
+        self.assertEqual([e["candidate_number"] for e in kept], ["1"])
+        self.assertEqual(excluded[0][0]["candidate_number"], "2")
+        self.assertEqual(excluded[0][1], ["FY27"])
+
+    def test_a_candidate_absent_from_the_export_is_kept(self):
+        """Absence is not evidence — we cannot prove they are misfiled."""
+        essays = [_essay("9", "TRI", "aaa")]
+        kept, excluded = main._check_campaign_membership(
+            essays, "FY26", [self._app("1", "FY26")]
+        )
+        self.assertEqual(len(kept), 1)
+        self.assertEqual(excluded, [])
+
+    def test_a_candidate_in_both_campaigns_is_kept(self):
+        essays = [_essay("1", "TRI", "aaa")]
+        apps = [self._app("1", "FY26"), self._app("1", "FY27")]
+        kept, _ = main._check_campaign_membership(essays, "FY27", apps)
+        self.assertEqual(len(kept), 1)
+
+    def test_no_export_means_no_guard(self):
+        essays = [_essay("1", "TRI", "aaa")]
+        for applications in (None, []):
+            kept, excluded = main._check_campaign_membership(
+                essays, "FY26", applications
+            )
+            self.assertEqual(len(kept), 1)
+            self.assertEqual(excluded, [])
+
+    def test_the_exclusion_is_named_not_just_counted(self):
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            main._report_excluded([(_essay("2", "TRI", "b"), ["FY27"])], "FY26")
+        output = buffer.getvalue()
+        self.assertIn("2|TRI", output)
+        self.assertIn("FY27", output)
+
+
 class TestArgParsing(unittest.TestCase):
     def test_dry_run_defaults_off(self):
         self.assertFalse(main._parse_args([]).dry_run)

@@ -284,6 +284,50 @@ class TestFindEmbargoes(unittest.TestCase):
         self.assertEqual(found["100"].days_apart, 1)
 
 
+class TestFinancialYear(unittest.TestCase):
+    """The List declares the campaign; that beats deriving it from the date."""
+
+    def test_the_exported_value_is_quoted(self):
+        """The raw cell is literally `'2026'`, apostrophes and all."""
+        self.assertEqual(rl.parse_financial_year("'2026'"), "FY26")
+
+    def test_other_spellings(self):
+        for raw in ("2026", " 2026 ", "FY26", "FY2026", "'2027'"):
+            expected = "FY27" if "27" in raw else "FY26"
+            self.assertEqual(rl.parse_financial_year(raw), expected, raw)
+
+    def test_unreadable_values_yield_nothing_rather_than_a_guess(self):
+        for raw in ("", None, "N/A", "financial year", "20267"):
+            self.assertEqual(rl.parse_financial_year(raw), "")
+
+    def test_the_declared_year_wins_over_the_date(self):
+        """The case this exists for: a campaign can open before 1 October, so a
+        September application can legitimately belong to the next FY."""
+        september = rl.Application(
+            "100", _date("2026-09-20"), "TRI", "", "", "FY27"
+        )
+        self.assertEqual(rl.campaign_of_application(september), "FY27")
+        # What the date alone would have said, and why it is not enough:
+        from campaign import fy_for_date
+        self.assertEqual(fy_for_date(september.submitted_at), "FY26")
+
+    def test_the_date_is_used_when_no_year_is_declared(self):
+        """Exports predating the FINANCIALYEAR column still work."""
+        legacy = rl.Application("100", _date("2026-07-28"), "TRI", "", "", "")
+        self.assertEqual(rl.campaign_of_application(legacy), "FY26")
+
+    def test_an_early_next_year_application_can_still_be_embargoed(self):
+        """Read by date, the September row would be FY26 and could never be
+        flagged against the July FY26 one."""
+        apps = [
+            rl.Application("100", _date("2026-07-28"), "TRI", "", "", "FY26"),
+            rl.Application("100", _date("2026-09-20"), "LTC", "", "", "FY27"),
+        ]
+        found = eb.find_embargoes(apps, "FY27")
+        self.assertIn("100", found)
+        self.assertEqual(found["100"].days_apart, 54)
+
+
 class TestFindExport(unittest.TestCase):
     """Locating the nightly export, which is named for the day it was taken."""
 

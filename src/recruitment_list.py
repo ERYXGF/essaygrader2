@@ -125,6 +125,7 @@ class Application(NamedTuple):
     role: str
     outcome: str  # final decision where recorded: YES/NO/PENDING/APPROVED/...
     successful: str  # 'APPLICATION SUCCESSFUL' — the written-task sift result.
+    financial_year: str = ""  # declared campaign, normalised: '2026' -> 'FY26'
 
 
 def _decode_sharepoint(name: str) -> str:
@@ -175,6 +176,7 @@ _CREATED = "created"
 _STAFF_NUMBER = "staffnumber"
 _ROLE = "positionappliedfor"
 _SUCCESSFUL = "applicationsuccessful"
+_FINANCIAL_YEAR = "financialyear"
 
 # Readable names for the error message, since the lookup keys are squashed.
 _COLUMN_LABELS = {_CREATED: "Created", _STAFF_NUMBER: "Staff Number"}
@@ -185,6 +187,39 @@ _COLUMN_LABELS = {_CREATED: "Created", _STAFF_NUMBER: "Staff Number"}
 _OUTCOME_COLUMNS = ("finalapproval", "decision", "outcome")
 
 REQUIRED_COLUMNS = (_CREATED, _STAFF_NUMBER)
+
+
+def parse_financial_year(value: str) -> str:
+    """Normalises the List's declared financial year to 'FY26'.
+
+    The export stores it as a quoted string — the raw cell is literally
+    `'2026'`, apostrophes included — so the value is unquoted rather than merely
+    trimmed. Accepts '2026', "'2026'", 'FY26' and 'FY2026'.
+
+    Returns '' when the column is absent or unreadable, which sends the caller
+    to the submission date instead. Guessing here would be worse than
+    admitting ignorance: the campaign decides what is graded and what an
+    embargo is measured against.
+    """
+    digits = re.sub(r"\D", "", value or "")
+    if len(digits) not in (2, 4):
+        return ""
+    return f"FY{digits[-2:]}"
+
+
+def campaign_of_application(application: "Application") -> str:
+    """The campaign an application belongs to.
+
+    Prefers the year the List declares over the one its date implies. A campaign
+    can open before 1 October — FY27 applications arrive during September while
+    FY26 is still live — so deriving the campaign from the submission date
+    misfiles every early arrival. This is the same reason `config/campaign.txt`
+    is declared rather than detected; the export now lets the same principle
+    apply per application.
+
+    Falls back to the date for exports predating the column.
+    """
+    return application.financial_year or fy_for_date(application.submitted_at)
 
 
 def parse_date(value: str) -> Optional[dt.date]:
@@ -276,7 +311,8 @@ def load_report(path: Optional[Path] = None):
             return index[candidates[0]]
 
         positions = {key: locate(key) for key in
-                     (_CREATED, _STAFF_NUMBER, _ROLE, _SUCCESSFUL)}
+                     (_CREATED, _STAFF_NUMBER, _ROLE, _SUCCESSFUL,
+                      _FINANCIAL_YEAR)}
         missing = [c for c in REQUIRED_COLUMNS if positions.get(c) is None]
         if missing:
             raise ValueError(
@@ -310,6 +346,9 @@ def load_report(path: Optional[Path] = None):
                     role=field(row, positions[_ROLE]),
                     outcome=field(row, outcome_position).upper(),
                     successful=field(row, positions[_SUCCESSFUL]).upper(),
+                    financial_year=parse_financial_year(
+                        field(row, positions[_FINANCIAL_YEAR])
+                    ),
                 )
             )
 
@@ -335,7 +374,7 @@ def submitted_dates(applications: List[Application]) -> Dict[tuple, dt.date]:
     for application in applications:
         key = (
             application.staff_number,
-            fy_for_date(application.submitted_at),
+            campaign_of_application(application),
             application.role,
         )
         existing = dates.get(key)

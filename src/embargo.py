@@ -15,7 +15,12 @@ Campaign boundaries do the work of separating a re-application from a double
 application. Candidates routinely apply for two roles in the *same* campaign,
 days apart — that is the Double Application column's business, not this one — so
 only an application from a **strictly earlier campaign** can trigger an embargo.
-Reusing `campaign.fy_for_date` for that keeps one definition of a campaign year.
+Which campaign an application belongs to is the List's own declared
+FINANCIALYEAR where it has one, falling back to the submission date — see
+`recruitment_list.campaign_of_application`. That matters here: a campaign can
+open before 1 October, so an FY27 application arriving in September would
+otherwise be read as FY26 and could never trigger an embargo against a real
+FY26 application.
 
 Nothing here blocks or skips anything. The embargo is reported, and a human
 decides.
@@ -25,8 +30,11 @@ import calendar
 import datetime as dt
 from typing import Dict, List, NamedTuple, Optional
 
-from campaign import fy_for_date
-from recruitment_list import Application, by_staff_number
+from recruitment_list import (
+    Application,
+    by_staff_number,
+    campaign_of_application,
+)
 
 # The embargo period, measured from the earlier submission date.
 EMBARGO_MONTHS = 6
@@ -42,7 +50,7 @@ class Embargo(NamedTuple):
 
     @property
     def prior_campaign(self) -> str:
-        return fy_for_date(self.prior.submitted_at)
+        return campaign_of_application(self.prior)
 
 
 def subtract_months(date: dt.date, months: int) -> dt.date:
@@ -79,7 +87,7 @@ def find_embargoes(
 
     for staff_number, history in by_staff_number(applications).items():
         current_apps = [
-            a for a in history if fy_for_date(a.submitted_at) == campaign
+            a for a in history if campaign_of_application(a) == campaign
         ]
         if not current_apps:
             continue
@@ -88,7 +96,7 @@ def find_embargoes(
         for current in current_apps:
             cutoff = subtract_months(current.submitted_at, window_months)
             for prior in history:
-                if fy_for_date(prior.submitted_at) >= campaign:
+                if campaign_of_application(prior) >= campaign:
                     continue  # same campaign or later: not a re-application
                 if not cutoff <= prior.submitted_at <= current.submitted_at:
                     continue  # outside the window, or somehow in the future
