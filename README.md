@@ -26,9 +26,10 @@ version with anonymisation, see `../essaygrader/`.
    `output/ai_essay_grading_report_<campaign>.xlsx` — one file per campaign,
    so running FY26 never overwrites FY27's report
    - **Summary**: one row per candidate — `Financial Year`, `Submitted` (the
-     real submission date), `Double Application`, `Embargo`, classification
-     colour-coded, the cross-cutting scores, `File Format`, `Rubric Version`,
-     and a colour-coded `Plagiarism Flag` column (empty when clean)
+     real submission date), `Double Application`, `Embargo` (YES/NO/UNKNOWN)
+     and `Embargo Detail`, classification colour-coded, the cross-cutting
+     scores, `File Format`, `Rubric Version`, and a colour-coded
+     `Plagiarism Flag` column (empty when clean)
    - **Detailed**: strengths, weaknesses, rationale, AI risk indicators, and a
      summary column per question (Q1/Q2/Q3), keyed by canonical question number
      so a candidate who answered out of sequence still lines up with the rest
