@@ -28,6 +28,7 @@ from grading_cache import (
     classify,
     partition,
     merge_and_update,
+    history,
     campaign_of,
     stale_keys,
     stale_extractions,
@@ -38,7 +39,12 @@ from grading_cache import (
     REASON_LABELS,
 )
 from plagiarism_checker import check_plagiarism, apply_plagiarism_overrides
-from recruitment_list import load_report as load_recruitment_list, DEFAULT_LIST_FILE
+from recruitment_list import (
+    load_report as load_recruitment_list,
+    submitted_dates,
+    submitted_for,
+    DEFAULT_LIST_FILE,
+)
 from embargo import find_embargoes, describe as describe_embargo, EMBARGO_MONTHS
 from report_writer import write_report
 
@@ -127,13 +133,11 @@ NOT_CHECKED = "? embargo not checked — recruitment list missing"
 NOT_LISTED = "? not in recruitment list"
 
 
-def _apply_embargoes(results: list, campaign: str, list_path) -> None:
-    """Annotates each result with its re-application embargo status, in place.
+def _load_applications(list_path) -> Optional[list]:
+    """Reads the recruitment list once, for the embargo and the dates alike.
 
-    A blank cell must mean "checked, and clear" — never "not checked". Any
-    candidate we could not judge is therefore marked explicitly, because a
-    blank in a workbook that circulates would be read as a clean bill of
-    health, which is exactly the mistake this column exists to prevent.
+    Returns None when the export is absent, which callers treat as "cannot be
+    checked" rather than as "nothing found".
     """
     list_file = Path(list_path) if list_path else DEFAULT_LIST_FILE
 
@@ -142,17 +146,57 @@ def _apply_embargoes(results: list, campaign: str, list_path) -> None:
     except FileNotFoundError:
         print(
             f"   ⚠ No recruitment list at {list_file} — the {EMBARGO_MONTHS}-month "
-            f"re-application embargo was NOT checked."
+            f"re-application embargo was NOT checked, and no submission dates "
+            f"are available."
         )
-        for result in results:
-            result["embargo"] = NOT_CHECKED
-        return
+        return None
 
     if skipped:
         # These rows carry no staff number or no readable date, so they cannot
         # place an application in time. Say so — a silently dropped row is a
         # candidate who could clear the embargo when they should not.
         print(f"   ⚠ {skipped} recruitment list row(s) skipped (no staff number or date)")
+    return applications
+
+
+def _apply_submission_dates(rows: list, applications: Optional[list]) -> None:
+    """Annotates rows with the date their application arrived, in place.
+
+    Each row supplies its own campaign, so this works for a Summary row (one
+    campaign) and a History row (any campaign) without distinction. A date that
+    cannot be resolved is left blank rather than approximated.
+    """
+    if not applications:
+        for row in rows:
+            row.setdefault("submitted", "")
+        return
+
+    dates = submitted_dates(applications)
+    for row in rows:
+        found = submitted_for(
+            dates,
+            str(row.get("candidate_number", "")),
+            row.get("campaign", ""),
+            row.get("Role", row.get("role", "")),
+        )
+        # A real date object, not a formatted string: the report_writer gives
+        # it a display format, and Excel then sorts and filters it as a date.
+        # As text, '02 Jul' would sort above '29 Jun'.
+        row["submitted"] = found or ""
+
+
+def _apply_embargoes(results: list, campaign: str, applications: Optional[list]) -> None:
+    """Annotates each result with its re-application embargo status, in place.
+
+    A blank cell must mean "checked, and clear" — never "not checked". Any
+    candidate we could not judge is therefore marked explicitly, because a
+    blank in a workbook that circulates would be read as a clean bill of
+    health, which is exactly the mistake this column exists to prevent.
+    """
+    if applications is None:
+        for result in results:
+            result["embargo"] = NOT_CHECKED
+        return
 
     embargoes = find_embargoes(applications, campaign)
     listed = {a.staff_number for a in applications}
@@ -338,12 +382,19 @@ def run_pipeline(
     print(f"   ✓ {len(similarity_pairs)} pair(s) flagged for review")
 
     # ============================================================
-    # STEP 4 — RE-APPLICATION EMBARGO
+    # STEP 4 — RE-APPLICATION EMBARGO AND SUBMISSION DATES
     # ============================================================
     # Reported, never enforced: the row is graded and written either way, and a
-    # human decides what the flag is worth.
+    # human decides what the flag is worth. The recruitment list is read once
+    # here and serves the embargo, the Submitted column and the History sheet.
     print("📋 Checking the re-application embargo...")
-    _apply_embargoes(results, campaign, recruitment_list)
+    applications = _load_applications(recruitment_list)
+    _apply_embargoes(results, campaign, applications)
+    _apply_submission_dates(results, applications)
+
+    # Every campaign, deliberately — this is the cross-FY view.
+    candidate_history = history(cache)
+    _apply_submission_dates(candidate_history, applications)
 
     # ============================================================
     # STEP 5 — REPORT GENERATION
@@ -353,6 +404,7 @@ def run_pipeline(
         results=results,
         output_path=str(report_file),
         similarity_pairs=similarity_pairs,
+        history=candidate_history,
     )
 
     # ============================================================

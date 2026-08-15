@@ -425,6 +425,33 @@ def partition(
     return to_grade, reused
 
 
+def history(cache: Dict) -> List[Dict]:
+    """Every graded submission in the cache, across **all** campaigns.
+
+    Deliberately ignores the campaign filter that governs everywhere else. That
+    filter exists so a campaign's report contains only its own candidates; this
+    is the one view whose whole purpose is to cross those boundaries, so a
+    reviewer can see what a returning candidate scored last time.
+
+    Sorted by candidate, then campaign, so a candidate's applications appear
+    together in chronological order.
+    """
+    rows = []
+    for entry in cache.get("candidates", {}).values():
+        if not isinstance(entry, dict):
+            continue
+        result = entry.get("result") or {}
+        rows.append({
+            "candidate_number": entry.get("candidate_number", ""),
+            "campaign": campaign_of(entry),
+            "role": entry.get("role", ""),
+            "classification": result.get("classification", ""),
+            "rubric_version": entry.get("rubric_version", ""),
+        })
+    rows.sort(key=lambda r: (r["candidate_number"], r["campaign"], r["role"]))
+    return rows
+
+
 def merge_and_update(
     cache: Dict,
     essays: List[Dict],
@@ -527,6 +554,7 @@ def merge_and_update(
             **entry["result"],
             "rubric_version": entry.get("rubric_version", ""),
             "rubric_is_current": entry.get("prompt_sha256") == current_prompt_hash,
+            "campaign": campaign_of(entry),
         })
         plagiarism_essays.append({
             "candidate_number": entry["candidate_number"],

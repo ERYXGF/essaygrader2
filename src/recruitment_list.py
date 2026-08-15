@@ -49,6 +49,8 @@ import re
 from pathlib import Path
 from typing import Dict, List, NamedTuple, Optional
 
+from campaign import fy_for_date
+
 BASE_DIR = Path(__file__).resolve().parent
 DEFAULT_LIST_FILE = BASE_DIR.parent / "input" / "recruitment_list.csv"
 
@@ -272,6 +274,51 @@ def load_report(path: Optional[Path] = None):
     # match when scanning, and ordering is deterministic for tests.
     applications.sort(key=lambda a: (a.submitted_at, a.staff_number))
     return applications, skipped
+
+
+def submitted_dates(applications: List[Application]) -> Dict[tuple, dt.date]:
+    """Maps (staff number, campaign, role) -> the date that application arrived.
+
+    The campaign comes from the submission date itself via `fy_for_date`, so the
+    export needs no campaign column of its own.
+
+    **Where a candidate applied more than once for the same role in the same
+    campaign, the latest date wins.** This is real, not hypothetical: 860775 has
+    two FY26 LTC rows, 4 June and 15 July, but only one graded essay. The essay
+    on file is the most recent submission, so the most recent date is the one
+    that describes it.
+    """
+    dates: Dict[tuple, dt.date] = {}
+    for application in applications:
+        key = (
+            application.staff_number,
+            fy_for_date(application.submitted_at),
+            application.role,
+        )
+        existing = dates.get(key)
+        if existing is None or application.submitted_at > existing:
+            dates[key] = application.submitted_at
+    return dates
+
+
+def submitted_for(
+    dates: Dict[tuple, dt.date], staff_number: str, campaign: str, role: str
+) -> Optional[dt.date]:
+    """The submission date for one graded entry, or None if it is not known.
+
+    Falls back to ignoring the role, which covers a candidate whose List entry
+    records the post differently from the filename that was graded. Returns None
+    rather than any nearby date when nothing matches — a Submitted cell must
+    never be an inference.
+    """
+    exact = dates.get((staff_number, campaign, role))
+    if exact is not None:
+        return exact
+    same_campaign = [
+        date for (staff, camp, _), date in dates.items()
+        if staff == staff_number and camp == campaign
+    ]
+    return max(same_campaign) if same_campaign else None
 
 
 def by_staff_number(applications: List[Application]) -> Dict[str, List[Application]]:

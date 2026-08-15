@@ -20,19 +20,36 @@ The report has up to three sheets:
                everyone else.
 - Similarity : one row per flagged essay pair with the full plagiarism evidence
                (only written when similarity_pairs is provided).
+- History    : every application by a candidate who appears in more than one
+               campaign, so a returning candidate's earlier grades are visible
+               beside the current one. The only sheet that crosses campaign
+               boundaries (only written when history is provided).
 """
 
+import datetime as dt
 from pathlib import Path
 from typing import List, Dict, Optional
 
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment
 
+# Submission dates are written as real dates so Excel sorts and filters them
+# chronologically; this is only how they are displayed.
+DATE_FORMAT = "DD MMM YYYY"
+
+
+def _write_date(cell, value) -> None:
+    """Writes a date cell, giving a real date its display format."""
+    cell.value = value
+    if isinstance(value, (dt.date, dt.datetime)):
+        cell.number_format = DATE_FORMAT
+
 
 def write_report(
     results: List[Dict],
     output_path: str,
     similarity_pairs: Optional[List[Dict]] = None,
+    history: Optional[List[Dict]] = None,
 ) -> None:
     """Writes the grading results to an .xlsx file at output_path.
 
@@ -40,6 +57,9 @@ def write_report(
     Pass None (the default) to skip the Similarity sheet entirely — existing
     callers are unaffected. An empty list writes the sheet with a
     "no pairs flagged" row, so a clean run is distinguishable from no run.
+
+    history is grading_cache.history() — every graded submission across all
+    campaigns. Pass None to skip the History sheet.
     """
     if not results:
         raise ValueError("No results provided to write report")
@@ -73,6 +93,8 @@ def write_report(
     summary_headers = [
         "Candidate Number",
         "Role",
+        "Campaign",
+        "Submitted",
         "Double Application",
         "Embargo",
         "Classification",
@@ -101,6 +123,8 @@ def write_report(
         values = [
             r.get("candidate_number", "Unknown"),
             r.get("Role", "Unknown"),
+            r.get("campaign", ""),
+            r.get("submitted", ""),
             "Yes" if r.get("candidate_number") in double_applicants else "No",
             r.get("embargo", ""),
             r.get("classification", "Unknown"),
@@ -118,7 +142,8 @@ def write_report(
         ]
 
         for col, val in enumerate(values, 1):
-            cell = ws1.cell(row=row_idx, column=col, value=val)
+            cell = ws1.cell(row=row_idx, column=col)
+            _write_date(cell, val)
             cell.alignment = center
 
         # File format: a readable Word/Pages submission is graded normally,
@@ -226,6 +251,12 @@ def write_report(
     if similarity_pairs is not None:
         _write_similarity_sheet(wb, similarity_pairs, header_font, red, yellow)
 
+    # ============================================================
+    # SHEET 4 — HISTORY (candidates who appear in more than one campaign)
+    # ============================================================
+    if history is not None:
+        _write_history_sheet(wb, history, header_font)
+
     # =========================
     # SAVE
     # =========================
@@ -294,6 +325,66 @@ def _question_summaries(assessments: List[Dict]) -> Dict[int, str]:
         summaries.setdefault(position, entry.get("summary", "") or "")
 
     return summaries
+
+
+def _write_history_sheet(
+    wb: Workbook, history: List[Dict], header_font: Font
+) -> None:
+    """One row per application, for candidates seen in more than one campaign.
+
+    Candidates confined to a single campaign are omitted: their one row is
+    already the Summary, and repeating all ~150 of them would bury the handful
+    of returning candidates this sheet exists to show.
+
+    It pairs with the Summary's Embargo column. The flag says a candidate
+    re-applied 76 days after an FY26 application; this says what they scored
+    that time.
+    """
+    ws = wb.create_sheet(title="History")
+
+    headers = [
+        "Candidate Number",
+        "Campaign",
+        "Role",
+        "Submitted",
+        "Classification",
+        "Rubric Version",
+    ]
+    for col, h in enumerate(headers, 1):
+        cell = ws.cell(row=1, column=col, value=h)
+        cell.font = header_font
+
+    campaigns_per_candidate = {}
+    for row in history:
+        campaigns_per_candidate.setdefault(row.get("candidate_number"), set()).add(
+            row.get("campaign")
+        )
+    returning = [
+        row for row in history
+        if len(campaigns_per_candidate.get(row.get("candidate_number"), ())) > 1
+    ]
+
+    if not returning:
+        ws.cell(
+            row=2, column=1,
+            value="No candidate has applied in more than one campaign yet.",
+        )
+        _autosize(ws, max_width=40)
+        return
+
+    for row_idx, row in enumerate(returning, start=2):
+        values = [
+            row.get("candidate_number", ""),
+            row.get("campaign", ""),
+            row.get("role", ""),
+            row.get("submitted", ""),
+            row.get("classification", ""),
+            row.get("rubric_version", ""),
+        ]
+        for col, val in enumerate(values, 1):
+            _write_date(ws.cell(row=row_idx, column=col), val)
+
+    _autosize(ws, max_width=40)
 
 
 def _write_similarity_sheet(

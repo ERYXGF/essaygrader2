@@ -201,7 +201,9 @@ class TestEmbargoWiring(unittest.TestCase):
         results = self._results()
         buffer = io.StringIO()
         with redirect_stdout(buffer):
-            main._apply_embargoes(results, "FY27", "/nonexistent/list.csv")
+            main._apply_embargoes(
+                results, "FY27", main._load_applications("/nonexistent/list.csv")
+            )
         self.assertTrue(all(r["embargo"] == main.NOT_CHECKED for r in results))
         self.assertIn("NOT checked", buffer.getvalue())
 
@@ -213,7 +215,9 @@ class TestEmbargoWiring(unittest.TestCase):
         ])
         results = self._results()
         with redirect_stdout(io.StringIO()):
-            main._apply_embargoes(results, "FY27", path)
+            main._apply_embargoes(
+                results, "FY27", main._load_applications(path)
+            )
         self.assertTrue(results[0]["embargo"].startswith("⚠"))
         self.assertEqual(results[1]["embargo"], "")
 
@@ -221,7 +225,9 @@ class TestEmbargoWiring(unittest.TestCase):
         path = self._list([("12/10/2026 08:30", "872524", "LTC")])
         results = self._results()
         with redirect_stdout(io.StringIO()):
-            main._apply_embargoes(results, "FY27", path)
+            main._apply_embargoes(
+                results, "FY27", main._load_applications(path)
+            )
         self.assertEqual(results[1]["embargo"], main.NOT_LISTED)
 
     def test_nothing_is_removed_from_the_results(self):
@@ -232,7 +238,9 @@ class TestEmbargoWiring(unittest.TestCase):
         ])
         results = self._results()
         with redirect_stdout(io.StringIO()):
-            main._apply_embargoes(results, "FY27", path)
+            main._apply_embargoes(
+                results, "FY27", main._load_applications(path)
+            )
         self.assertEqual(len(results), 2)
 
 

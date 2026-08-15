@@ -548,6 +548,33 @@ class TestCampaignScoping(unittest.TestCase):
         self.assertEqual(gc.stale_keys(cache, new_hash, "FY27"),
                          [_key("2", "TRI", "FY27")])
 
+    def test_history_crosses_campaigns_the_report_filter_excludes(self):
+        """history() is the one view that deliberately ignores the filter."""
+        cache = self._graded([_essay("1", "LTC", "last year")], "FY26")
+        fy27 = [_essay("1", "LTC", "this year")]
+        gc.merge_and_update(
+            cache, fy27, [(fy27[0], _result("1", "LTC", "Maybe"))],
+            gc.prompt_hash(PROMPT_A), "v2.0", "FY27",
+        )
+
+        rows = gc.history(cache)
+        self.assertEqual([r["campaign"] for r in rows], ["FY26", "FY27"])
+        self.assertEqual(
+            [r["classification"] for r in rows], ["Priority Interview", "Maybe"]
+        )
+        # Meanwhile the report itself still sees one campaign.
+        results, _ = gc.merge_and_update(
+            cache, [], [], gc.prompt_hash(PROMPT_A), "v2.0", "FY27"
+        )
+        self.assertEqual(len(results), 1)
+
+    def test_results_carry_their_campaign(self):
+        cache = self._graded([_essay("1", "LTC", "aaa")], "FY26")
+        results, _ = gc.merge_and_update(
+            cache, [], [], gc.prompt_hash(PROMPT_A), "v1.0", "FY26"
+        )
+        self.assertEqual(results[0]["campaign"], "FY26")
+
     def test_entries_without_a_campaign_backfill_to_the_legacy_one(self):
         """Grades predating the field were all produced during FY26."""
         self.assertEqual(gc.campaign_of({}), gc.LEGACY_CAMPAIGN)

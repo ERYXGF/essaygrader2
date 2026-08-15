@@ -10,6 +10,7 @@ No API calls are made. Run from the project root with:
     venv\\Scripts\\python.exe -m unittest discover tests -v
 """
 
+import datetime as dt
 import sys
 import tempfile
 import unittest
@@ -174,6 +175,56 @@ class TestDoubleApplication(unittest.TestCase):
         self.assertEqual(numbers, set())
 
 
+class TestHistorySheet(unittest.TestCase):
+    """The one sheet that crosses campaign boundaries."""
+
+    def _history(self, rows):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "report.xlsx"
+            rw.write_report([_result("1", "TRI", [])], str(path), history=rows)
+            ws = load_workbook(path)["History"]
+            return [[c.value for c in row] for row in ws.iter_rows()]
+
+    def _row(self, number, campaign, role="TRI", classification="Maybe"):
+        return {
+            "candidate_number": number,
+            "campaign": campaign,
+            "role": role,
+            "submitted": dt.date(2026, 7, 28),
+            "classification": classification,
+            "rubric_version": "v9.4",
+        }
+
+    def test_a_returning_candidate_shows_every_campaign(self):
+        rows = self._history([
+            self._row("872524", "FY26", "TRI", "Priority Interview"),
+            self._row("872524", "FY27", "LTC", "Maybe"),
+        ])
+        self.assertEqual(rows[0][:3], ["Candidate Number", "Campaign", "Role"])
+        self.assertEqual([r[1] for r in rows[1:]], ["FY26", "FY27"])
+        self.assertEqual([r[4] for r in rows[1:]], ["Priority Interview", "Maybe"])
+
+    def test_a_single_campaign_candidate_is_omitted(self):
+        """Their one row is already the Summary; repeating ~150 of them would
+        bury the handful of returning candidates this sheet is for."""
+        rows = self._history([
+            self._row("872524", "FY26"),
+            self._row("872524", "FY27"),
+            self._row("111111", "FY26"),
+        ])
+        self.assertEqual({r[0] for r in rows[1:]}, {"872524"})
+
+    def test_nobody_returning_says_so_rather_than_looking_broken(self):
+        rows = self._history([self._row("111111", "FY26")])
+        self.assertIn("more than one campaign", str(rows[1][0]))
+
+    def test_the_sheet_is_absent_when_no_history_is_passed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "report.xlsx"
+            rw.write_report([_result("1", "TRI", [])], str(path))
+            self.assertNotIn("History", load_workbook(path).sheetnames)
+
+
 class TestSummarySheet(unittest.TestCase):
     def _summary(self, results):
         with tempfile.TemporaryDirectory() as tmp:
@@ -197,6 +248,20 @@ class TestSummarySheet(unittest.TestCase):
         ])
         col = headers.index("Double Application")
         self.assertEqual([r[col] for r in rows], ["Yes", "Yes", "No"])
+
+    def test_campaign_and_submitted_are_written(self):
+        row = _result("1", "TRI", [])
+        row["campaign"] = "FY26"
+        row["submitted"] = dt.date(2026, 7, 28)
+        headers, rows, _ = self._summary([row])
+        self.assertEqual(rows[0][headers.index("Campaign")], "FY26")
+        # A real date, not text: Excel must sort it chronologically.
+        self.assertEqual(rows[0][headers.index("Submitted")], dt.datetime(2026, 7, 28))
+
+    def test_a_row_with_no_date_leaves_submitted_blank(self):
+        """No recruitment list, or a candidate absent from it. Never a guess."""
+        headers, rows, _ = self._summary([_result("1", "TRI", [])])
+        self.assertIn(rows[0][headers.index("Submitted")], ("", None))
 
     def test_embargo_text_is_written_and_banded_red(self):
         flagged = _result("1", "TRI", [])

@@ -283,6 +283,45 @@ class TestFindEmbargoes(unittest.TestCase):
         self.assertEqual(found["100"].days_apart, 1)
 
 
+class TestSubmittedDates(unittest.TestCase):
+    """Resolving the date one graded submission actually arrived."""
+
+    def test_maps_candidate_campaign_and_role_to_a_date(self):
+        dates = rl.submitted_dates([_app("100", _date("2026-07-28"), "TRI")])
+        self.assertEqual(dates[("100", "FY26", "TRI")], _date("2026-07-28"))
+
+    def test_the_later_of_two_same_role_applications_wins(self):
+        """Real case: 860775 has FY26 LTC rows on 4 Jun and 15 Jul, but only
+        one graded essay — and the essay on file is the later submission."""
+        dates = rl.submitted_dates([
+            _app("860775", _date("2026-06-04"), "LTC"),
+            _app("860775", _date("2026-07-15"), "LTC"),
+        ])
+        self.assertEqual(dates[("860775", "FY26", "LTC")], _date("2026-07-15"))
+
+    def test_the_same_role_in_two_campaigns_stays_separate(self):
+        dates = rl.submitted_dates([
+            _app("100", _date("2026-07-28"), "LTC"),
+            _app("100", _date("2026-10-15"), "LTC"),
+        ])
+        self.assertEqual(dates[("100", "FY26", "LTC")], _date("2026-07-28"))
+        self.assertEqual(dates[("100", "FY27", "LTC")], _date("2026-10-15"))
+
+    def test_lookup_falls_back_to_the_campaign_when_the_role_differs(self):
+        dates = rl.submitted_dates([_app("100", _date("2026-07-28"), "LTC")])
+        self.assertEqual(
+            rl.submitted_for(dates, "100", "FY26", "TFO TRI"), _date("2026-07-28")
+        )
+
+    def test_an_unknown_candidate_returns_nothing_rather_than_a_guess(self):
+        dates = rl.submitted_dates([_app("100", _date("2026-07-28"), "LTC")])
+        self.assertIsNone(rl.submitted_for(dates, "999", "FY26", "LTC"))
+
+    def test_the_wrong_campaign_returns_nothing(self):
+        dates = rl.submitted_dates([_app("100", _date("2026-07-28"), "LTC")])
+        self.assertIsNone(rl.submitted_for(dates, "100", "FY27", "LTC"))
+
+
 class TestDescribe(unittest.TestCase):
     def test_names_the_campaign_gap_and_role(self):
         found = eb.find_embargoes([
