@@ -31,6 +31,17 @@ def _result(number, role, classification="Priority Interview"):
     return {"candidate_number": number, "Role": role, "classification": classification}
 
 
+def _key(number, role, campaign=""):
+    """The cache key, built the way the module builds it.
+
+    Tests ask for keys through this rather than spelling the format out, so a
+    change to the key layout shows up as a real failure rather than as dozens
+    of string literals to hand-edit. An empty campaign resolves to FY26, which
+    is what the production default does.
+    """
+    return gc._cache_key(campaign, number, role)
+
+
 PROMPT_A = "Grade essays with rubric A."
 PROMPT_B = "Grade essays with rubric B (changed)."
 
@@ -74,7 +85,7 @@ class TestLoadSave(unittest.TestCase):
             path = str(Path(d) / "cache.json")
             cache = {
                 "prompt_sha256": "abc",
-                "candidates": {"1|LTC": {"x": 1, "prompt_sha256": "abc"}},
+                "candidates": {_key("1", "LTC"): {"x": 1, "prompt_sha256": "abc"}},
             }
             gc.save_cache(path, cache)
             self.assertEqual(gc.load_cache(path), cache)
@@ -199,14 +210,15 @@ class TestRoleScopedPartition(unittest.TestCase):
             cache, essays, [(tri, _result("2", "TRI"))], new_hash, "v2.0"
         )
 
-        self.assertEqual(cache["candidates"]["2|TRI"]["prompt_sha256"], new_hash)
-        self.assertEqual(cache["candidates"]["2|TRI"]["rubric_version"], "v2.0")
+        self.assertEqual(cache["candidates"][_key("2", "TRI")]["prompt_sha256"], new_hash)
+        self.assertEqual(cache["candidates"][_key("2", "TRI")]["rubric_version"], "v2.0")
         # The LTC row keeps the rubric it was actually graded under.
         self.assertEqual(
-            cache["candidates"]["1|LTC"]["prompt_sha256"], gc.prompt_hash(PROMPT_A)
+            cache["candidates"][_key("1", "LTC")]["prompt_sha256"],
+            gc.prompt_hash(PROMPT_A),
         )
-        self.assertEqual(cache["candidates"]["1|LTC"]["rubric_version"], "v1.0")
-        self.assertEqual(gc.stale_keys(cache, new_hash), ["1|LTC"])
+        self.assertEqual(cache["candidates"][_key("1", "LTC")]["rubric_version"], "v1.0")
+        self.assertEqual(gc.stale_keys(cache, new_hash), [_key("1", "LTC")])
 
     def test_results_carry_rubric_version_and_currency(self):
         essays = [_essay("1", "LTC", "aaa"), _essay("2", "TRI", "bbb")]
@@ -365,7 +377,7 @@ class TestFileIdentity(unittest.TestCase):
     def test_bumping_the_extractor_version_forces_a_reread(self):
         """The deliberate key still works."""
         cache = self._seed([_file_essay("1", "LTC", "aaa", "FILE-A")])
-        cache["candidates"]["1|LTC"]["extractor_version"] = "0"  # graded by an older one
+        cache["candidates"][_key("1", "LTC")]["extractor_version"] = "0"  # graded by an older one
         self.assertEqual(
             self._reason(_file_essay("1", "LTC", "aaa", "FILE-A"), cache),
             gc.REASON_REEXTRACTED,
@@ -374,7 +386,7 @@ class TestFileIdentity(unittest.TestCase):
     def test_resubmission_beats_a_version_bump(self):
         """A changed file is reported as a resubmission, not a re-extraction."""
         cache = self._seed([_file_essay("1", "LTC", "aaa", "FILE-A")])
-        cache["candidates"]["1|LTC"]["extractor_version"] = "0"
+        cache["candidates"][_key("1", "LTC")]["extractor_version"] = "0"
         self.assertEqual(
             self._reason(_file_essay("1", "LTC", "aaa", "FILE-B"), cache),
             gc.REASON_CHANGED,
@@ -383,7 +395,7 @@ class TestFileIdentity(unittest.TestCase):
     def test_legacy_entry_without_a_file_hash_falls_back_to_text(self):
         """Upgrading must not invalidate a single existing grade."""
         cache = self._seed([_essay("1", "LTC", "aaa")])  # no file_sha256
-        cache["candidates"]["1|LTC"].pop("file_sha256", None)
+        cache["candidates"][_key("1", "LTC")].pop("file_sha256", None)
 
         unchanged = _essay("1", "LTC", "aaa")
         self.assertEqual(self._reason(unchanged, cache), gc.REASON_CURRENT)
@@ -397,7 +409,7 @@ class TestFileIdentity(unittest.TestCase):
 
     def test_entry_records_both_new_fields(self):
         cache = self._seed([_file_essay("1", "LTC", "aaa", "FILE-A")])
-        entry = cache["candidates"]["1|LTC"]
+        entry = cache["candidates"][_key("1", "LTC")]
         self.assertEqual(entry["file_sha256"], "FILE-A")
         self.assertEqual(entry["extractor_version"], gc.EXTRACTOR_VERSION)
 
@@ -430,7 +442,7 @@ class TestStaleExtractions(unittest.TestCase):
 
     def test_deliberate_reextraction_is_not_reported_as_drift(self):
         cache = self._seed([_file_essay("1", "LTC", "aaa", "FILE-A")])
-        cache["candidates"]["1|LTC"]["extractor_version"] = "0"
+        cache["candidates"][_key("1", "LTC")]["extractor_version"] = "0"
         reread = [_file_essay("1", "LTC", "aaa better", "FILE-A")]
         self.assertEqual(gc.stale_extractions(reread, cache), [])
 
@@ -455,8 +467,86 @@ class TestCampaignScoping(unittest.TestCase):
 
     def test_a_grade_records_the_campaign_it_was_produced_in(self):
         cache = self._graded([_essay("1", "LTC", "aaa")], "FY27")
-        self.assertEqual(cache["candidates"]["1|LTC"]["campaign"], "FY27")
-        self.assertTrue(cache["candidates"]["1|LTC"]["graded_at"])
+        self.assertEqual(cache["candidates"][_key("1", "LTC", "FY27")]["campaign"], "FY27")
+        self.assertTrue(cache["candidates"][_key("1", "LTC", "FY27")]["graded_at"])
+
+    def test_a_returning_candidate_does_not_overwrite_last_years_grade(self):
+        """The regression this key layout exists to prevent.
+
+        A candidate who applied in FY26 and re-applies in FY27 for the SAME
+        role used to land on the same cache key, destroying the FY26 grade —
+        and they are precisely the candidates the embargo flags, so last year's
+        grade is the one a reviewer most wants to see.
+        """
+        fy26 = [_essay("1", "LTC", "last year")]
+        cache = self._graded(fy26, "FY26")
+
+        fy27 = [_essay("1", "LTC", "this year")]
+        gc.merge_and_update(
+            cache, fy27, [(fy27[0], _result("1", "LTC", "Maybe"))],
+            gc.prompt_hash(PROMPT_B), "v2.0", "FY27",
+        )
+
+        self.assertEqual(len(cache["candidates"]), 2)
+        old = cache["candidates"][_key("1", "LTC", "FY26")]
+        new = cache["candidates"][_key("1", "LTC", "FY27")]
+        self.assertEqual(old["essay_text"], "last year")
+        self.assertEqual(new["essay_text"], "this year")
+        self.assertEqual(old["rubric_version"], "v1.0")
+        self.assertEqual(old["result"]["classification"], "Priority Interview")
+        self.assertEqual(new["result"]["classification"], "Maybe")
+
+    def test_last_years_report_still_rebuilds_after_a_returning_candidate(self):
+        """--fy FY26 must still reproduce the FY26 row, not the FY27 one."""
+        fy26 = [_essay("1", "LTC", "last year")]
+        cache = self._graded(fy26, "FY26")
+        fy27 = [_essay("1", "LTC", "this year")]
+        gc.merge_and_update(
+            cache, fy27, [(fy27[0], _result("1", "LTC", "Maybe"))],
+            gc.prompt_hash(PROMPT_B), "v2.0", "FY27",
+        )
+
+        results, _ = gc.merge_and_update(
+            cache, [], [], gc.prompt_hash(PROMPT_A), "v1.0", "FY26"
+        )
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["classification"], "Priority Interview")
+        self.assertEqual(results[0]["rubric_version"], "v1.0")
+
+    def test_a_returning_candidate_is_new_work_not_a_resubmission(self):
+        """No FY27 entry exists yet, so it is NEW. It grades either way — the
+        point is that last year's grade is not this year's starting point."""
+        cache = self._graded([_essay("1", "LTC", "last year")], "FY26")
+        classified = gc.classify(
+            [_essay("1", "LTC", "this year")], cache,
+            gc.prompt_hash(PROMPT_A), None, "FY27",
+        )
+        self.assertEqual([r for _, r in classified], [gc.REASON_NEW])
+
+    def test_re_applying_for_a_different_role_also_stays_separate(self):
+        cache = self._graded([_essay("1", "LTC", "aaa")], "FY26")
+        fy27 = [_essay("1", "TRI", "bbb")]
+        gc.merge_and_update(
+            cache, fy27, [(fy27[0], _result("1", "TRI"))],
+            gc.prompt_hash(PROMPT_A), "v1.0", "FY27",
+        )
+        self.assertEqual(
+            sorted(cache["candidates"]),
+            sorted([_key("1", "LTC", "FY26"), _key("1", "TRI", "FY27")]),
+        )
+
+    def test_stale_keys_can_be_scoped_to_one_campaign(self):
+        """Last year's grades are out of scope by design, not work left undone."""
+        cache = self._graded([_essay("1", "LTC", "aaa")], "FY26")
+        fy27 = [_essay("2", "TRI", "bbb")]
+        gc.merge_and_update(
+            cache, fy27, [(fy27[0], _result("2", "TRI"))],
+            gc.prompt_hash(PROMPT_A), "v1.0", "FY27",
+        )
+        new_hash = gc.prompt_hash(PROMPT_B)
+        self.assertEqual(len(gc.stale_keys(cache, new_hash)), 2)
+        self.assertEqual(gc.stale_keys(cache, new_hash, "FY27"),
+                         [_key("2", "TRI", "FY27")])
 
     def test_entries_without_a_campaign_backfill_to_the_legacy_one(self):
         """Grades predating the field were all produced during FY26."""
@@ -485,8 +575,10 @@ class TestCampaignScoping(unittest.TestCase):
             cache, new, [(new[0], _result("2", "TRI"))],
             gc.prompt_hash(PROMPT_A), "v1.0", "FY27",
         )
-        self.assertIn("1|LTC", cache["candidates"])
-        self.assertEqual(cache["candidates"]["1|LTC"]["campaign"], "FY26")
+        self.assertIn(_key("1", "LTC", "FY26"), cache["candidates"])
+        self.assertEqual(
+            cache["candidates"][_key("1", "LTC", "FY26")]["campaign"], "FY26"
+        )
 
     def test_an_earlier_campaign_can_be_reported_again(self):
         cache = self._graded([_essay("1", "LTC", "aaa")], "FY26")
@@ -502,7 +594,9 @@ class TestCampaignScoping(unittest.TestCase):
         gc.merge_and_update(
             cache, essays, [], gc.prompt_hash(PROMPT_A), "v1.0", "FY27"
         )
-        self.assertEqual(cache["candidates"]["1|LTC"]["campaign"], "FY26")
+        self.assertEqual(
+            cache["candidates"][_key("1", "LTC", "FY26")]["campaign"], "FY26"
+        )
 
     def test_no_campaign_means_no_filtering(self):
         cache = self._graded([_essay("1", "LTC", "aaa")], "FY26")
@@ -553,13 +647,28 @@ class TestLegacyCacheMigration(unittest.TestCase):
 
             cache = gc.load_cache(str(path))
             self.assertEqual(
-                cache["candidates"]["1|LTC"]["prompt_sha256"], gc.prompt_hash(PROMPT_A)
+                cache["candidates"][_key("1", "LTC")]["prompt_sha256"], gc.prompt_hash(PROMPT_A)
             )
             to_grade, reused = gc.partition(
                 [_essay("1", "LTC", "aaa")], cache, gc.prompt_hash(PROMPT_A)
             )
             self.assertEqual(to_grade, [])
             self.assertEqual(len(reused), 1)
+
+    def test_pre_campaign_keys_gain_the_campaign_exactly_once(self):
+        """Loading twice must not produce 'FY26|FY26|1|LTC'."""
+        legacy = {"1|LTC": {"campaign": "FY26", "result": {}}}
+        once = gc._migrate_keys(legacy)
+        self.assertEqual(list(once), [_key("1", "LTC", "FY26")])
+        self.assertEqual(gc._migrate_keys(once), once)
+
+    def test_a_key_is_migrated_using_its_own_campaign(self):
+        migrated = gc._migrate_keys({"1|LTC": {"campaign": "FY27", "result": {}}})
+        self.assertEqual(list(migrated), [_key("1", "LTC", "FY27")])
+
+    def test_a_role_containing_a_space_migrates_intact(self):
+        migrated = gc._migrate_keys({"872524|TFO TRI": {"result": {}}})
+        self.assertEqual(list(migrated), [_key("872524", "TFO TRI", "FY26")])
 
 
 # ------------------------------------------------------------

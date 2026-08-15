@@ -54,7 +54,7 @@ def _report_dry_run(
     """
     from collections import Counter
 
-    classified = classify(essays, cache, current_prompt_hash, roles)
+    classified = classify(essays, cache, current_prompt_hash, roles, campaign)
     counts = Counter(reason for _, reason in classified)
     would_grade = sum(counts[r] for r in GRADE_REASONS)
 
@@ -93,13 +93,13 @@ def _report_dry_run(
         for essay in changed:
             print(f"      {essay['candidate_number']}|{essay['role']}")
 
-    _warn_stale_extractions(essays, cache)
+    _warn_stale_extractions(essays, cache, campaign)
 
     print()
     print(f"   → {would_grade} API call(s) if run for real. Nothing was spent.")
 
 
-def _warn_stale_extractions(essays: list, cache: dict) -> None:
+def _warn_stale_extractions(essays: list, cache: dict, campaign: str = "") -> None:
     """Warns when extraction drifted but EXTRACTOR_VERSION was not bumped.
 
     Grades are keyed on the file, so this costs nothing — which is the point.
@@ -107,7 +107,7 @@ def _warn_stale_extractions(essays: list, cache: dict) -> None:
     read today, and staying silent about that would trade a cost surprise for
     a correctness one.
     """
-    drifted = stale_extractions(essays, cache)
+    drifted = stale_extractions(essays, cache, campaign)
     if not drifted:
         return
     print()
@@ -258,7 +258,9 @@ def run_pipeline(
         # it is not "ungraded".
         ungraded = [
             essay
-            for essay, reason in classify(essays, cache, current_prompt_hash, roles)
+            for essay, reason in classify(
+                essays, cache, current_prompt_hash, roles, campaign
+            )
             if reason in (REASON_NEW, REASON_CHANGED, REASON_REEXTRACTED)
         ]
         if ungraded:
@@ -271,16 +273,18 @@ def run_pipeline(
             if len(ungraded) > 10:
                 print(f"      ... and {len(ungraded) - 10} more")
     else:
-        to_grade, reused = partition(essays, cache, current_prompt_hash, roles)
+        to_grade, reused = partition(
+            essays, cache, current_prompt_hash, roles, campaign
+        )
         print(
             f"🗃️  Reusing {len(reused)} cached grade(s); "
             f"grading {len(to_grade)} new/changed essay(s)"
         )
-    _warn_stale_extractions(essays, cache)
+    _warn_stale_extractions(essays, cache, campaign)
     if roles is not None:
         # A scoped run must say plainly what it left behind, or a reviewer has
         # no way to know the report mixes rubrics.
-        left = len(stale_keys(cache, current_prompt_hash)) - len(to_grade)
+        left = len(stale_keys(cache, current_prompt_hash, campaign)) - len(to_grade)
         print(
             f"   ⚠ Regrade scoped to {', '.join(sorted(roles))} — "
             f"{max(left, 0)} grade(s) from an older rubric left untouched"

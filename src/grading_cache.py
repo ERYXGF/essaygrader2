@@ -82,9 +82,16 @@ def essay_hash(essay_text: str) -> str:
     return hashlib.sha256(normalised.encode("utf-8")).hexdigest()
 
 
-def _cache_key(candidate_number: str, role: str) -> str:
-    """JSON-safe key for the (candidate_number, role) pair."""
-    return f"{candidate_number}|{role}"
+def _cache_key(campaign: str, candidate_number: str, role: str) -> str:
+    """JSON-safe key for one graded submission: campaign, candidate and role.
+
+    The campaign is part of the identity because a candidate may apply in more
+    than one of them. Without it, an FY27 re-application for a role the
+    candidate already applied for in FY26 lands on the same key and overwrites
+    last year's grade — destroying exactly the history a reviewer wants when
+    the embargo flags that candidate as a re-applicant.
+    """
+    return f"{campaign or LEGACY_CAMPAIGN}|{candidate_number}|{role}"
 
 
 # The campaign that grades predate the `campaign` field belong to. Every grade
@@ -155,7 +162,30 @@ def load_cache(path: str) -> Dict:
     for entry in data["candidates"].values():
         if isinstance(entry, dict):
             entry.setdefault("prompt_sha256", data["prompt_sha256"])
+    data["candidates"] = _migrate_keys(data["candidates"])
     return data
+
+
+def _migrate_keys(candidates: Dict) -> Dict:
+    """Rewrites pre-campaign 'number|role' keys as 'campaign|number|role'.
+
+    Keys written before the campaign joined them identify only a candidate and
+    a role, so a later campaign's submission would overwrite them. The campaign
+    is taken from the entry's own `campaign` field via campaign_of(), which
+    backfills to FY26 — exact for every grade written so far, since FY26 is the
+    only campaign there has been.
+
+    Detection is by shape, not by looking for 'FY': a key with two fields is
+    old, three is current. That way a role containing the separator, or a
+    campaign label that stops starting with FY, cannot cause a second migration
+    of an already-migrated key.
+    """
+    migrated = {}
+    for key, entry in candidates.items():
+        if isinstance(entry, dict) and key.count("|") == 1:
+            key = f"{campaign_of(entry)}|{key}"
+        migrated[key] = entry
+    return migrated
 
 
 def save_cache(path: str, cache: Dict) -> None:
@@ -228,7 +258,8 @@ def record_grade(
     killed mid-write cannot corrupt what was already stored.
     """
     cache["prompt_sha256"] = current_prompt_hash
-    cache["candidates"][_cache_key(essay["candidate_number"], essay["role"])] = _entry(
+    key = _cache_key(campaign, essay["candidate_number"], essay["role"])
+    cache["candidates"][key] = _entry(
         essay, result, current_prompt_hash, version, campaign
     )
 
@@ -236,12 +267,20 @@ def record_grade(
 # ============================================================
 # PARTITION / MERGE
 # ============================================================
-def stale_keys(cache: Dict, current_prompt_hash: str) -> List[str]:
-    """Cache keys whose grade was produced under an older rubric or model."""
+def stale_keys(
+    cache: Dict, current_prompt_hash: str, campaign: str = ""
+) -> List[str]:
+    """Cache keys whose grade was produced under an older rubric or model.
+
+    Scoped to one campaign when given. Counting every campaign would report
+    last year's grades as work this run left undone, which is neither true nor
+    actionable — they are out of scope by design.
+    """
     return [
         key
         for key, entry in cache.get("candidates", {}).items()
         if entry.get("prompt_sha256") != current_prompt_hash
+        and (not campaign or campaign_of(entry) == campaign)
     ]
 
 
@@ -250,6 +289,7 @@ def classify(
     cache: Dict,
     current_prompt_hash: str,
     roles: Optional[Set[str]] = None,
+    campaign: str = "",
 ) -> List[Tuple[Dict, str]]:
     """Decides what happens to each essay, and why, in folder order.
 
@@ -278,12 +318,19 @@ def classify(
     keep, and skipping an out-of-scope one would leave a hole in the report.
     Only STALE_RUBRIC is gated by scope. roles=None means every stale grade is
     in scope, which is the whole-corpus behaviour.
+
+    Lookups are scoped to `campaign`, so a candidate returning in a new campaign
+    is NEW rather than CHANGED. Both grade, so the cost is identical; "new" is
+    simply the truer word for a fresh campaign's submission, and it is what
+    keeps last year's grade from being treated as this year's starting point.
     """
     candidates = cache["candidates"]
     classified: List[Tuple[Dict, str]] = []
 
     for essay in essays:
-        entry = candidates.get(_cache_key(essay["candidate_number"], essay["role"]))
+        entry = candidates.get(
+            _cache_key(campaign, essay["candidate_number"], essay["role"])
+        )
 
         if not entry:
             reason = REASON_NEW
@@ -318,7 +365,9 @@ def _file_changed(entry: Dict, essay: Dict) -> bool:
     return entry.get("essay_sha256") != essay_hash(essay.get("essay_text", ""))
 
 
-def stale_extractions(essays: List[Dict], cache: Dict) -> List[Dict]:
+def stale_extractions(
+    essays: List[Dict], cache: Dict, campaign: str = ""
+) -> List[Dict]:
     """Essays whose extracted text drifted without EXTRACTOR_VERSION changing.
 
     The file is the same and the extractor version is the same, yet the text
@@ -333,7 +382,9 @@ def stale_extractions(essays: List[Dict], cache: Dict) -> List[Dict]:
     candidates = cache.get("candidates", {})
     drifted = []
     for essay in essays:
-        entry = candidates.get(_cache_key(essay["candidate_number"], essay["role"]))
+        entry = candidates.get(
+            _cache_key(campaign, essay["candidate_number"], essay["role"])
+        )
         if not entry:
             continue
         if _file_changed(entry, essay):
@@ -350,6 +401,7 @@ def partition(
     cache: Dict,
     current_prompt_hash: str,
     roles: Optional[Set[str]] = None,
+    campaign: str = "",
 ) -> Tuple[List[Dict], List[Dict]]:
     """Splits the loaded essays into (to_grade, reused_results).
 
@@ -361,11 +413,13 @@ def partition(
     to_grade: List[Dict] = []
     reused: List[Dict] = []
 
-    for essay, reason in classify(essays, cache, current_prompt_hash, roles):
+    for essay, reason in classify(
+        essays, cache, current_prompt_hash, roles, campaign
+    ):
         if reason in GRADE_REASONS:
             to_grade.append(essay)
         else:
-            key = _cache_key(essay["candidate_number"], essay["role"])
+            key = _cache_key(campaign, essay["candidate_number"], essay["role"])
             reused.append(candidates[key]["result"])
 
     return to_grade, reused
@@ -406,13 +460,13 @@ def merge_and_update(
     candidates = cache["candidates"]
 
     graded_by_key = {
-        _cache_key(essay["candidate_number"], essay["role"]): (essay, result)
+        _cache_key(campaign, essay["candidate_number"], essay["role"]): (essay, result)
         for essay, result in graded
     }
 
     # Write/refresh a cache entry for every essay currently in the folder.
     for essay in essays:
-        key = _cache_key(essay["candidate_number"], essay["role"])
+        key = _cache_key(campaign, essay["candidate_number"], essay["role"])
         if key in graded_by_key:
             result = graded_by_key[key][1]
             entry_hash, entry_version = current_prompt_hash, version
@@ -446,7 +500,7 @@ def merge_and_update(
         )
 
     folder_keys = [
-        _cache_key(e["candidate_number"], e["role"]) for e in essays
+        _cache_key(campaign, e["candidate_number"], e["role"]) for e in essays
     ]
     # An essay in the folder with no cache entry has no grade to report. That
     # happens on a --report-only rebuild when a new PDF has been added but not
