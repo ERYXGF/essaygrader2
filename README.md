@@ -111,7 +111,7 @@ python -c "from dotenv import load_dotenv; import os; load_dotenv(); print('Key 
 # 1. Drop your candidate PDFs into input/essays/
 #    Filenames must match: {candidate_number}_{role}_assesment.pdf
 #    Example: 12345_LTC_assesment.pdf
-#    Valid roles: LTC, TFO, TRI
+#    Valid roles: LTC, TFO, TRI, TFO TRI
 
 # 2. Run the pipeline
 python src\main.py
@@ -134,7 +134,9 @@ The PDF loader is strict about filenames. Each PDF must be named:
 
 Where:
 - `candidate_number` is one or more digits (e.g. `12345`)
-- `role` is exactly one of: `LTC`, `TFO`, `TRI` (uppercase)
+- `role` is exactly one of: `LTC`, `TFO`, `TRI`, `TFO TRI` (uppercase). `TFO TRI`
+  sits the same written paper as `TRI`; `TFO_TRI` is accepted as an alternative
+  spelling and normalised to `TFO TRI`
 - The suffix is literally `_assesment.pdf`
 
 **Note on the spelling**: "assesment" is missing an 's'. This was the

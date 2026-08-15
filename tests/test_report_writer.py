@@ -141,6 +141,83 @@ class TestDetailedSheet(unittest.TestCase):
 
 
 # ------------------------------------------------------------
+# Double Application column
+# ------------------------------------------------------------
+class TestDoubleApplication(unittest.TestCase):
+    def test_same_number_under_two_roles_is_flagged(self):
+        numbers = rw._double_application_numbers([
+            {"candidate_number": "872524", "Role": "TRI"},
+            {"candidate_number": "872524", "Role": "TFO TRI"},
+            {"candidate_number": "111111", "Role": "LTC"},
+        ])
+        self.assertEqual(numbers, {"872524"})
+
+    def test_single_role_candidate_is_not_flagged(self):
+        self.assertEqual(
+            rw._double_application_numbers([{"candidate_number": "1", "Role": "LTC"}]),
+            set(),
+        )
+
+    def test_three_roles_still_flags_once(self):
+        numbers = rw._double_application_numbers([
+            {"candidate_number": "7", "Role": "LTC"},
+            {"candidate_number": "7", "Role": "TRI"},
+            {"candidate_number": "7", "Role": "TFO TRI"},
+        ])
+        self.assertEqual(numbers, {"7"})
+
+    def test_rows_without_a_candidate_number_are_ignored(self):
+        """Blank numbers must not group into a phantom double applicant."""
+        numbers = rw._double_application_numbers([
+            {"Role": "LTC"}, {"Role": "TRI"}, {"candidate_number": "", "Role": "TFO"},
+        ])
+        self.assertEqual(numbers, set())
+
+
+class TestSummarySheet(unittest.TestCase):
+    def _summary(self, results):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "report.xlsx"
+            rw.write_report(results, str(path))
+            ws = load_workbook(path)["Summary"]
+            headers = [c.value for c in ws[1]]
+            rows = [[c.value for c in row] for row in ws.iter_rows(min_row=2)]
+            fills = {
+                h: [ws.cell(row=r, column=headers.index(h) + 1).fill
+                    for r in range(2, ws.max_row + 1)]
+                for h in headers
+            }
+            return headers, rows, fills
+
+    def test_column_reports_yes_and_no(self):
+        headers, rows, _ = self._summary([
+            _result("872524", "TRI", []),
+            _result("872524", "TFO TRI", []),
+            _result("111111", "LTC", []),
+        ])
+        col = headers.index("Double Application")
+        self.assertEqual([r[col] for r in rows], ["Yes", "Yes", "No"])
+
+    def test_classification_band_still_lands_on_the_right_cell(self):
+        """Regression: the colour band used to assume Classification was 3rd.
+
+        Inserting Double Application ahead of it would silently colour the
+        wrong column.
+        """
+        headers, rows, fills = self._summary([_result("1", "LTC", [])])
+        self.assertGreater(
+            headers.index("Classification"), 2,
+            "Classification is no longer 3rd — this test guards that move",
+        )
+        green = "00C6EFCE"
+        self.assertEqual(fills["Classification"][0].start_color.rgb, green)
+        # And the column it displaced must NOT have been coloured.
+        self.assertNotEqual(
+            fills["Double Application"][0].start_color.rgb, green
+        )
+
+
+# ------------------------------------------------------------
 # Grader-side normalisation
 # ------------------------------------------------------------
 class TestNormaliseQuestionAssessments(unittest.TestCase):

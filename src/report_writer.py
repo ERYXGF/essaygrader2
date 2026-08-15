@@ -2,6 +2,8 @@
  
 The report has up to three sheets:
 - Summary    : one row per candidate, headline grades, colour-coded classification,
+               a Double Application column marking candidates who applied for
+               more than one role,
                a File Format column flagging submissions that aren't PDFs,
                a Rubric Version column (shaded when the row was graded under an
                older rubric than this run, as happens after a role-scoped
@@ -64,9 +66,12 @@ def write_report(
     ws1 = wb.active
     ws1.title = "Summary"
 
+    double_applicants = _double_application_numbers(results)
+
     summary_headers = [
         "Candidate Number",
         "Role",
+        "Double Application",
         "Classification",
         "Passion",
         "Humility",
@@ -93,6 +98,7 @@ def write_report(
         values = [
             r.get("candidate_number", "Unknown"),
             r.get("Role", "Unknown"),
+            "Yes" if r.get("candidate_number") in double_applicants else "No",
             r.get("classification", "Unknown"),
             cca.get("passion", ""),
             cca.get("humility", ""),
@@ -134,8 +140,12 @@ def write_report(
         elif "⚠ MEDIUM" in flag_value:
             flag_cell.fill = yellow
 
-        # Classification colour band
-        class_cell = ws1.cell(row=row_idx, column=3)
+        # Classification colour band. Located by header name, not position —
+        # inserting a column ahead of it would otherwise silently colour the
+        # wrong cells.
+        class_cell = ws1.cell(
+            row=row_idx, column=summary_headers.index("Classification") + 1
+        )
         classification = r.get("classification", "")
 
         if classification == "Priority Interview":
@@ -202,6 +212,26 @@ def write_report(
     # SAVE
     # =========================
     wb.save(output_file)
+
+
+def _double_application_numbers(results: List[Dict]) -> set:
+    """Candidate numbers appearing on more than one row.
+
+    A candidate may legitimately apply for several roles — uniqueness is
+    (candidate_number, role), so the same number showing twice is one person
+    applying twice, not two people. Nothing in the report said so, which is
+    what this answers. Rows with no candidate number are ignored rather than
+    being grouped together under a shared blank.
+    """
+    seen, repeated = set(), set()
+    for result in results:
+        number = result.get("candidate_number")
+        if not number:
+            continue
+        if number in seen:
+            repeated.add(number)
+        seen.add(number)
+    return repeated
 
 
 def _question_summaries(assessments: List[Dict]) -> Dict[int, str]:

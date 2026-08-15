@@ -39,7 +39,14 @@ from text_extractors import (
 FILENAME_SUFFIX = "_assignment.pdf"
 
 # Roles accepted in filenames. Must match what the grading prompt expects.
-VALID_ROLES = {"LTC", "TFO", "TRI"}
+# "TFO TRI" sits the same written paper as TRI and is assessed by the same
+# criteria; it is a distinct role for reporting, not an alias for TRI.
+VALID_ROLES = {"LTC", "TFO", "TRI", "TFO TRI"}
+
+# Spellings that mean the same role. Submissions arrive named
+# "12345_TFO TRI_assignment.pdf", but the underscored form is an easy thing for
+# someone to type, and a filename typo should not abort a whole run.
+ROLE_ALIASES = {"TFO_TRI": "TFO TRI"}
 
 # Report labels for the File Format column.
 WRONG_FORMAT_FLAG = "wrong format"
@@ -47,8 +54,14 @@ FORMAT_OK_LABEL = "OK"
 
 # Strict filename pattern: digits, underscore, role, "_assignment", any
 # extension. Anchored with ^ and $ so partial matches are rejected.
+#
+# The role group allows spaces and underscores so multi-word roles like
+# "TFO TRI" parse. Greedy matching still resolves correctly — it backtracks off
+# the trailing separator to satisfy "_assignment." — and VALID_ROLES remains the
+# real gatekeeper, so a mistyped role still gets a clear error rather than being
+# quietly accepted.
 FILENAME_PATTERN = re.compile(
-    r"^(?P<number>\d+)_(?P<role>[A-Z]+)_assignment\.(?P<extension>[A-Za-z0-9]+)$"
+    r"^(?P<number>\d+)_(?P<role>[A-Z_ ]+)_assignment\.(?P<extension>[A-Za-z0-9]+)$"
 )
 
 
@@ -193,7 +206,13 @@ def _file_hash(path: Path) -> str:
 
 
 def _parse_filename(filename: str) -> Tuple[str, str]:
-    """Extracts (candidate_number, role) from a filename or raises ValueError."""
+    """Extracts (candidate_number, role) from a filename or raises ValueError.
+
+    The role is normalised through ROLE_ALIASES, so 'TFO_TRI' and 'TFO TRI'
+    both resolve to the single canonical spelling. Everything downstream — the
+    cache key, the grading prompt, the report — then sees one role, not two
+    that happen to mean the same thing.
+    """
     match = FILENAME_PATTERN.match(filename)
     if not match:
         raise ValueError(
@@ -203,7 +222,8 @@ def _parse_filename(filename: str) -> Tuple[str, str]:
         )
 
     candidate_number = match.group("number")
-    role = match.group("role")
+    role = match.group("role").strip()
+    role = ROLE_ALIASES.get(role, role)
 
     if role not in VALID_ROLES:
         raise ValueError(
