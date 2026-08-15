@@ -1,7 +1,12 @@
 """Writes the Excel grading report.
  
-The report has up to three sheets:
+The report has up to four sheets:
+Every sheet carries a Financial Year column, as the number the recruitment
+List records (2026, not FY26), because downstream automation joins the workbook
+to the List on staff number AND financial year.
+
 - Summary    : one row per candidate, headline grades, colour-coded classification,
+               the true Submitted date from the recruitment list,
                a Double Application column marking candidates who applied for
                more than one role,
                an Embargo column flagging candidates who re-applied within six

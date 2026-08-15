@@ -1,15 +1,17 @@
 """Main pipeline controller.
 
-Flow:  PDFs in input/essays/  →  Claude grading  →  plagiarism screen  →  Excel report
+Flow:  PDFs in input/essays/  +  the recruitment list export
+         →  Claude grading  →  plagiarism screen  →  embargo  →  Excel report
 
 Run `python src/main.py` to process everything, or scope a rubric-driven
 regrade to particular roles with `--roles TRI`. New and edited submissions are
 always graded regardless of the scope — see grading_cache.classify().
 
 `--dry-run` reports what would be graded, and why, without spending anything.
-Worth doing before any rubric *or extractor* change: reuse is keyed on a hash
-of the extracted text, so changing how a PDF is read invalidates grades exactly
-as a rubric edit does.
+Worth doing before any rubric, model *or extractor* change. Reuse is keyed on
+the submitted file's bytes and on a fingerprint of the rubric and model, so
+editing any of those invalidates grades — and on a 154-essay corpus that is the
+difference between a free run and an expensive one.
 """
 
 import argparse

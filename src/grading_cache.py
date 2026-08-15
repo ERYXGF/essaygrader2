@@ -25,8 +25,11 @@ Design notes:
   - Grades are written one at a time as they complete (`record_grade`), not in
     one batch at the end, so an interrupted run keeps everything it finished.
     A full cold run takes hours; losing it to a rate limit is not acceptable.
-  - Cache entries are keyed by (candidate_number, role): a candidate may
-    legitimately apply for more than one role, exactly as pdf_loader dedups.
+  - Cache entries are keyed by (campaign, candidate_number, role). A candidate
+    may legitimately apply for more than one role, exactly as pdf_loader dedups,
+    and may also apply again in a later campaign — without the campaign in the
+    key, that re-application would overwrite the earlier grade, destroying the
+    history a reviewer wants when the embargo flags them as a re-applicant.
 """
 
 import datetime as dt

@@ -61,7 +61,7 @@ essaygrader2/
 │   ├── essays/                    # drop PDFs here
 │   │   ├── 12345_LTC_assignment.pdf
 │   │   └── ...
-│   └── Recruitment_Export_2026-08-06.csv   # nightly List export
+│   └── Recruitment_Export_2026-08-15.csv   # nightly List export
 │
 ├── output/
 │   ├── ai_essay_grading_report_FY26.xlsx    # one per campaign
@@ -79,7 +79,9 @@ essaygrader2/
 │   ├── essay_grader.py            # Claude API calls, retry logic, JSON parsing
 │   ├── grading_cache.py           # incremental cache: only grade new/changed essays
 │   ├── plagiarism_checker.py      # pairwise similarity screen + Claude verdicts
-│   ├── recruitment_list.py        # reads the List export: submission dates
+│   ├── text_extractors.py         # PDF / Word / Pages text, with OCR fallback
+│   ├── ocr.py                     # OCR for scanned or broken-font submissions
+│   ├── recruitment_list.py        # reads the List export: dates, FY, decisions
 │   ├── embargo.py                 # the six-month re-application rule
 │   ├── report_writer.py           # Excel report generation
 │   └── main.py                    # five-step orchestrator
@@ -140,7 +142,7 @@ python -c "from dotenv import load_dotenv; import os; load_dotenv(); print('Key 
 #    Valid roles: LTC, TFO, TRI, TFO TRI
 
 # 2. Drop the nightly recruitment export into input/
-#    Example: Recruitment_Export_2026-08-06.csv
+#    Example: Recruitment_Export_2026-08-15.csv
 
 # 3. Check config/campaign.txt names the current campaign (e.g. FY26)
 
@@ -235,7 +237,7 @@ Instructor Recruitment Master List (a Microsoft List), backed up nightly.
 - It is opened **read-only**. Every output of this pipeline goes to the Excel
   workbook; the master list is never written to.
 
-Two columns are read from it.
+Four columns are read from it.
 
 **`Created`** — the submission date. It cannot be recovered from the PDFs:
 filesystem mtimes are reset by copying, and a PDF's internal `CreationDate`
@@ -251,7 +253,16 @@ rather than detected — the export simply lets the principle apply per
 application as well as per run.
 
 Exports predating the column fall back to the submission date, so older backups
-still load. Everything else in the export is carried for reporting or ignored.
+still load.
+
+**`INTERVIEW DECISION`** and **`FINAL APPROVAL`** — what happened to each
+application, shown on the History sheet so a returning candidate's previous
+outcome sits beside their current one. Both are reported **verbatim and never
+interpreted**: `INTERVIEW DECISION` is not the YES/NO it looks like, and the
+live export also carries `PENDING` and `HOLD`, so nothing here treats a non-YES
+as a NO. If your own automation reads that column, handle four values.
+
+Everything else in the export is ignored.
 
 Both export shapes are handled: the friendly export (display headers with emoji,
 UK `dd/mm/yyyy` dates) and SharePoint's raw OData export (escaped internal names
@@ -306,16 +317,18 @@ Where:
   spelling and normalised to `TFO TRI`
 - The suffix is literally `_assignment.pdf`
 
-**Note on the spelling**: "assesment" is missing an 's'. This was the
-spelling in the original spec and the code matches it exactly. If you ever
-want to fix it, change `FILENAME_SUFFIX` at the top of
-`src/pdf_loader.py` and rename your PDFs to match.
+The suffix is `FILENAME_SUFFIX` at the top of `src/pdf_loader.py`, if it ever
+needs to change.
+
+Word and Pages submissions are read too. They are graded normally but flagged in
+the `File Format` column, because the interviewers cannot open them.
 
 The loader will refuse to process anything that doesn't match — no quiet
 guessing. If you need to rename a batch in PowerShell:
 
 ```powershell
-Get-ChildItem input\essays\*_assignment.pdf | Rename-Item -NewName { $_.Name -replace '_assignment\.pdf$', '_assignment.pdf' }
+Get-ChildItem input\essays\*_assesment.pdf |
+  Rename-Item -NewName { $_.Name -replace '_assesment\.pdf$', '_assignment.pdf' }
 ```
 
 ---
@@ -324,9 +337,13 @@ Get-ChildItem input\essays\*_assignment.pdf | Rename-Item -NewName { $_.Name -re
 
 Each module has one job:
 
-- **`pdf_loader.py`** — scans the essays folder, parses filenames, extracts
-  text from each PDF. Refuses scanned/image-based PDFs (raises an error
-  rather than sending nonsense to Claude).
+- **`campaign.py`** — which financial year a run belongs to, and the FY ⇄ year
+  conversion the report uses.
+- **`pdf_loader.py`** — scans the essays folder, parses filenames, dedups by
+  (candidate, role), extracts text from each PDF.
+- **`text_extractors.py`** / **`ocr.py`** — PDF, Word and Pages text extraction.
+  A large PDF yielding almost no text, or one whose font mapping is broken, falls
+  back to OCR; only if OCR *also* fails is the submission rejected.
 - **`essay_grader.py`** — handles everything API-related: building the
   Claude client with custom HTTP settings, calling the API in streaming
   mode with retries, parsing the JSON response.
@@ -336,9 +353,16 @@ Each module has one job:
   Claude for a verdict (`confirmed` / `suspicious` / `likely_coincidence`)
   with quoted evidence. High-risk matches downgrade `Priority Interview`
   to `Maybe` (never upgrades — `Do Not Interview` stays).
-- **`report_writer.py`** — writes the Excel report with three sheets and
+- **`grading_cache.py`** — the incremental cache: what to grade, what to reuse,
+  and why. `classify()` is the single source of truth for that decision, so
+  `--dry-run` can never disagree with what a real run would do.
+- **`recruitment_list.py`** — reads the List export: submission dates, declared
+  financial year, and each application's decisions.
+- **`embargo.py`** — the six-month re-application rule. Pure functions over the
+  applications; it never touches the cache.
+- **`report_writer.py`** — writes the four-sheet Excel report with
   classification/risk-based colour coding.
-- **`main.py`** — orchestrates the four steps in order. No business logic
+- **`main.py`** — orchestrates the five steps in order. No business logic
   lives here.
 
 ### Why streaming + retries + custom HTTP client
@@ -477,9 +501,10 @@ in `essay_grader.py`. If Claude refused, look at the essay content.
 
 ### `PDF '...' yielded only X chars of text`
 
-The PDF is scanned/image-based rather than text-based. The current pipeline
-doesn't OCR. Either OCR the PDF separately first, or ask the candidate to
-resubmit as a text PDF.
+The PDF is scanned or image-based, **and OCR could not recover it either** —
+OCR is tried automatically before this error is raised. If the message says OCR
+is unavailable on this machine, install the OCR dependency; otherwise ask the
+candidate to resubmit as a text PDF.
 
 ### Pipeline runs but produces wrong-looking grades
 

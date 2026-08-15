@@ -5,10 +5,16 @@ It is a CSV export of a Microsoft List, backed up nightly, and it holds one row
 per application **across all campaigns** — which is what makes the re-application
 embargo computable at all.
 
-It is read for one thing: **the submission date**. `role`, `outcome` and
-`successful` are carried alongside it for reporting, and nothing else in the
-export is interpreted. The file is opened read-only and never written to — every
-output of this pipeline goes to the Excel workbook.
+Four columns are read: **`Created`** (the submission date), **`FINANCIALYEAR`**
+(the campaign the application belongs to, declared rather than inferred), and
+the **interview decision** and **final approval**, which the History sheet shows
+so a returning candidate's previous outcome sits beside their current one. The
+two decisions are reported verbatim and never interpreted — the live export
+carries PENDING and HOLD as well as YES/NO, so nothing may treat a non-YES as a
+NO. `role` rides along for reporting; everything else is ignored.
+
+The file is opened read-only and never written to — every output of this
+pipeline goes to the Excel workbook.
 
 Why this file matters more than the PDFs
 ----------------------------------------
