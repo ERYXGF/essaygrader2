@@ -11,6 +11,7 @@ No API calls are made. Run from the project root with:
 """
 
 import datetime as dt
+import os
 import sys
 import tempfile
 import unittest
@@ -281,6 +282,71 @@ class TestFindEmbargoes(unittest.TestCase):
         ]
         found = eb.find_embargoes(apps, "FY27")
         self.assertEqual(found["100"].days_apart, 1)
+
+
+class TestFindExport(unittest.TestCase):
+    """Locating the nightly export, which is named for the day it was taken."""
+
+    def _dir(self, names):
+        folder = Path(tempfile.mkdtemp())
+        for name in names:
+            (folder / name).write_text("Created,Staff Number\n", encoding="utf-8")
+        return folder
+
+    def test_the_newest_filename_date_wins(self):
+        folder = self._dir([
+            "Recruitment_Export_2026-08-06.csv",
+            "Recruitment_Export_2026-07-14.csv",
+            "Recruitment_Export_2026-08-15.csv",
+        ])
+        self.assertEqual(
+            rl.find_export(folder).name, "Recruitment_Export_2026-08-15.csv"
+        )
+
+    def test_mtime_is_ignored_in_favour_of_the_filename(self):
+        """Copying a file resets its mtime — the same trap that made submission
+        dates undetectable in the first place. The name carries the real date."""
+        folder = self._dir([
+            "Recruitment_Export_2026-08-15.csv",
+            "Recruitment_Export_2026-01-02.csv",
+        ])
+        # Make the OLD export look freshly modified.
+        os.utime(folder / "Recruitment_Export_2026-01-02.csv", (2 ** 31 - 1,) * 2)
+        self.assertEqual(
+            rl.find_export(folder).name, "Recruitment_Export_2026-08-15.csv"
+        )
+
+    def test_lowercase_names_are_found(self):
+        folder = self._dir(["recruitment_export_2026-08-06.csv"])
+        self.assertEqual(
+            rl.find_export(folder).name, "recruitment_export_2026-08-06.csv"
+        )
+
+    def test_an_undated_export_is_used_when_it_is_all_there_is(self):
+        folder = self._dir(["Recruitment_Export_final.csv"])
+        self.assertEqual(rl.find_export(folder).name, "Recruitment_Export_final.csv")
+
+    def test_a_dated_export_beats_an_undated_one(self):
+        folder = self._dir([
+            "Recruitment_Export_final.csv",
+            "Recruitment_Export_2026-08-06.csv",
+        ])
+        self.assertEqual(
+            rl.find_export(folder).name, "Recruitment_Export_2026-08-06.csv"
+        )
+
+    def test_the_hand_renamed_fallback_still_works(self):
+        folder = self._dir(["recruitment_list.csv"])
+        self.assertEqual(rl.find_export(folder).name, "recruitment_list.csv")
+
+    def test_nothing_found_raises_and_says_where_it_looked(self):
+        """A missing export must never be mistaken for 'nobody applied'."""
+        folder = self._dir([])
+        with self.assertRaises(FileNotFoundError) as caught:
+            rl.find_export(folder)
+        message = str(caught.exception)
+        self.assertIn(str(folder), message)
+        self.assertIn("Recruitment_Export", message)
 
 
 class TestSubmittedDates(unittest.TestCase):

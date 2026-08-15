@@ -52,7 +52,50 @@ from typing import Dict, List, NamedTuple, Optional
 from campaign import fy_for_date
 
 BASE_DIR = Path(__file__).resolve().parent
-DEFAULT_LIST_FILE = BASE_DIR.parent / "input" / "recruitment_list.csv"
+DEFAULT_LIST_DIR = BASE_DIR.parent / "input"
+
+# The nightly backup is named for the day it was taken:
+# 'Recruitment_Export_2026-08-06.csv'. Matched case-insensitively, since the
+# export's capitalisation is not ours to rely on.
+EXPORT_GLOB = "[Rr]ecruitment_[Ee]xport_*.csv"
+EXPORT_DATE = re.compile(r"(\d{4})[-_]?(\d{2})[-_]?(\d{2})")
+
+# Accepted as a fallback for anyone who renamed their export by hand.
+FALLBACK_NAME = "recruitment_list.csv"
+
+
+def find_export(directory: Optional[Path] = None) -> Path:
+    """The most recent recruitment export in `directory`.
+
+    Newest is decided by **the date in the filename**, not the file's mtime.
+    That is the same trap this whole feature exists to avoid: copying a file
+    resets its mtime, so on a machine the exports were copied to, every one of
+    them looks like it arrived on the day of the copy. The name carries the real
+    date. An export whose name has no readable date sorts last rather than being
+    ignored, so it is still usable when it is all there is.
+
+    Raises FileNotFoundError naming the directory and the pattern — a missing
+    export must be diagnosable, never indistinguishable from "nobody applied".
+    """
+    folder = Path(directory) if directory else DEFAULT_LIST_DIR
+
+    def sort_key(path: Path):
+        match = EXPORT_DATE.search(path.name)
+        return (1, path.name) if match else (0, path.name)
+
+    exports = sorted(folder.glob(EXPORT_GLOB), key=sort_key, reverse=True)
+    if exports:
+        return exports[0]
+
+    fallback = folder / FALLBACK_NAME
+    if fallback.exists():
+        return fallback
+
+    raise FileNotFoundError(
+        f"No recruitment export in '{folder}'. Expected a file named like "
+        f"'Recruitment_Export_2026-08-06.csv' (or '{FALLBACK_NAME}'), or pass "
+        f"--recruitment-list with an explicit path."
+    )
 
 # The OData export uses ISO 8601 in UTC; the friendly export uses UK dates.
 # '01/04/2026' is 1 April, never 4 January — parsing it the American way would
@@ -185,7 +228,7 @@ def load_report(path: Optional[Path] = None):
     Returns (applications, skipped). Separated so the normal call site stays
     tidy while the pipeline can still report how much of the export it ignored.
     """
-    list_file = Path(path) if path else DEFAULT_LIST_FILE
+    list_file = Path(path) if path else find_export()
 
     # utf-8-sig: the export carries a BOM, and leaving it attached would turn
     # the first header into '﻿Created' and break the lookup.

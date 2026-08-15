@@ -43,7 +43,8 @@ from recruitment_list import (
     load_report as load_recruitment_list,
     submitted_dates,
     submitted_for,
-    DEFAULT_LIST_FILE,
+    find_export,
+    DEFAULT_LIST_DIR,
 )
 from embargo import find_embargoes, describe as describe_embargo, EMBARGO_MONTHS
 from report_writer import write_report
@@ -139,18 +140,18 @@ def _load_applications(list_path) -> Optional[list]:
     Returns None when the export is absent, which callers treat as "cannot be
     checked" rather than as "nothing found".
     """
-    list_file = Path(list_path) if list_path else DEFAULT_LIST_FILE
-
     try:
+        # An explicit path wins; otherwise the newest dated export in input/.
+        list_file = Path(list_path) if list_path else find_export()
         applications, skipped = load_recruitment_list(list_file)
-    except FileNotFoundError:
+    except FileNotFoundError as missing:
         print(
-            f"   ⚠ No recruitment list at {list_file} — the {EMBARGO_MONTHS}-month "
-            f"re-application embargo was NOT checked, and no submission dates "
-            f"are available."
+            f"   ⚠ {missing} The {EMBARGO_MONTHS}-month re-application embargo "
+            f"was NOT checked, and no submission dates are available."
         )
         return None
 
+    print(f"   ✓ Recruitment list: {list_file.name}")
     if skipped:
         # These rows carry no staff number or no readable date, so they cannot
         # place an application in time. Say so — a silently dropped row is a
@@ -458,8 +459,9 @@ def _parse_args(argv=None) -> argparse.Namespace:
         help=(
             "Path to the Instructor Recruitment Master List CSV export, which "
             "supplies the true submission dates the re-application embargo is "
-            f"measured from. Defaults to {DEFAULT_LIST_FILE}. Without it the "
-            "embargo cannot be checked and every row says so."
+            "measured from. Defaults to the newest "
+            f"Recruitment_Export_<date>.csv in {DEFAULT_LIST_DIR}. Without it "
+            "the embargo cannot be checked and every row says so."
         ),
     )
     return parser.parse_args(argv)
