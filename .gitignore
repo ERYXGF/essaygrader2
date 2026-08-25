@@ -27,3 +27,6 @@ input/
 
 #The essay prompt (to not see the questions)
 essay_prompt.txt
+
+# web/ deploy logs
+logs/

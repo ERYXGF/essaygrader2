@@ -1,0 +1,472 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>essaygrader2</title>
+<style>
+  :root {
+    --bg: #0f172a; --card: #1e293b; --card2: #16213a; --border: #334155;
+    --text: #e2e8f0; --muted: #94a3b8; --accent: #38bdf8; --accent-ink: #0f172a;
+    --good: #34d399; --warn: #fbbf24; --bad: #f87171;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  main { max-width: 46rem; margin: 0 auto; padding: 2rem 1.25rem 4rem; }
+  header { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 1.25rem; }
+  h1 { font-size: 1.4rem; margin: 0; }
+  h1 span { color: var(--accent); }
+  #logout {
+    background: none; border: 1px solid var(--border); color: var(--muted);
+    border-radius: .5rem; padding: .35rem .75rem; font-size: .8rem; cursor: pointer;
+  }
+  #logout:hover { color: var(--text); border-color: var(--muted); }
+
+  .banner {
+    display: flex; align-items: center; gap: .6rem; padding: .7rem 1rem;
+    border-radius: .6rem; background: var(--card2); border: 1px solid var(--border);
+    margin-bottom: .75rem; font-size: .9rem;
+  }
+  .banner .fy { font-weight: 700; color: var(--accent); }
+  .banner.stale { background: #3a2a10; border-color: #78530f; color: #fde68a; }
+  .banner .hint { color: var(--muted); font-size: .8rem; }
+  select.fy-select {
+    background: var(--bg); color: var(--accent); border: 1px solid var(--border);
+    border-radius: .4rem; padding: .25rem .5rem; font-size: .9rem; font-weight: 700;
+    font-family: inherit; cursor: pointer;
+  }
+  select.fy-select:focus { outline: 2px solid var(--accent); }
+
+  section.card {
+    background: var(--card); border: 1px solid var(--border); border-radius: .9rem;
+    padding: 1.25rem; margin-bottom: 1rem;
+  }
+  section.card h2 { font-size: 1rem; margin: 0 0 .8rem; color: var(--muted); font-weight: 700; text-transform: uppercase; letter-spacing: .04em; }
+
+  .dropzone {
+    border: 2px dashed var(--border); border-radius: .7rem; padding: 1.25rem;
+    text-align: center; cursor: pointer; transition: border-color .15s, background .15s;
+  }
+  .dropzone:hover, .dropzone.drag { border-color: var(--accent); background: rgba(56,189,248,.06); }
+  .dropzone .hint { color: var(--muted); font-size: .82rem; margin-top: .3rem; }
+  .dropzone input { display: none; }
+  .upload-status { margin-top: .6rem; font-size: .85rem; color: var(--good); min-height: 1.2em; }
+  .upload-status.error { color: var(--bad); }
+
+  .row { display: flex; gap: 1rem; flex-wrap: wrap; }
+  .row > div { flex: 1; min-width: 14rem; }
+
+  .roles-scope { margin-top: 1rem; padding-top: .9rem; border-top: 1px solid var(--border); }
+  .roles-scope .hint { color: var(--muted); font-size: .8rem; margin-bottom: .5rem; }
+  .roles-scope label {
+    display: inline-flex; align-items: center; gap: .35rem; margin: 0 1rem .3rem 0;
+    font-size: .88rem; cursor: pointer;
+  }
+  .roles-scope input { accent-color: var(--accent); cursor: pointer; }
+
+  button.primary {
+    background: var(--accent); color: var(--accent-ink); border: 0; border-radius: .6rem;
+    padding: .65rem 1.1rem; font-size: .92rem; font-weight: 700; cursor: pointer;
+  }
+  button.primary:hover { background: #0ea5e9; }
+  button.primary:disabled { opacity: .5; cursor: not-allowed; }
+  button.secondary {
+    background: transparent; color: var(--text); border: 1px solid var(--border);
+    border-radius: .6rem; padding: .65rem 1.1rem; font-size: .92rem; cursor: pointer;
+  }
+  button.secondary:hover { border-color: var(--muted); }
+
+  table.counts { width: 100%; border-collapse: collapse; margin: .5rem 0 1rem; font-size: .88rem; }
+  table.counts td { padding: .3rem .2rem; border-bottom: 1px solid var(--border); }
+  table.counts td:last-child { text-align: right; font-variant-numeric: tabular-nums; color: var(--accent); font-weight: 700; }
+  .warn-list { font-size: .82rem; color: var(--warn); margin: .4rem 0; }
+  .warn-list ul { margin: .3rem 0 0; padding-left: 1.1rem; }
+
+  .actions { display: flex; gap: .6rem; flex-wrap: wrap; margin-top: .5rem; }
+
+  .progress-bar { height: .55rem; border-radius: 9999px; background: var(--card2); overflow: hidden; margin: .6rem 0; }
+  .progress-bar > div { height: 100%; background: var(--accent); width: 0%; transition: width .3s; }
+  .step-label { font-size: .88rem; color: var(--muted); }
+  .step-label strong { color: var(--text); }
+  pre.log {
+    background: #0b1220; border: 1px solid var(--border); border-radius: .5rem;
+    padding: .7rem; font-size: .76rem; line-height: 1.4; max-height: 14rem; overflow-y: auto;
+    white-space: pre-wrap; word-break: break-word; margin: .6rem 0 0;
+  }
+
+  .banner-error {
+    background: #3a1414; border: 1px solid #7f1d1d; color: #fecaca;
+    padding: .7rem 1rem; border-radius: .6rem; font-size: .88rem; margin-bottom: .75rem;
+  }
+  .hidden { display: none !important; }
+  a.download-link {
+    display: inline-block; background: var(--good); color: #06281c; text-decoration: none;
+    font-weight: 700; padding: .65rem 1.1rem; border-radius: .6rem; font-size: .92rem;
+  }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>essaygrader<span>2</span></h1>
+    <button id="logout">Sign out</button>
+  </header>
+
+  <div id="campaignBanner" class="banner">
+    Recruitment season:
+    <select id="fySelect" class="fy-select">
+      <option value="FY26">FY26</option>
+      <option value="FY27">FY27</option>
+      <option value="FY28">FY28</option>
+      <option value="FY29">FY29</option>
+      <option value="FY30">FY30</option>
+      <option value="FY31">FY31</option>
+    </select>
+  </div>
+  <div id="staleBanner" class="banner stale hidden"></div>
+  <div id="errorBanner" class="banner-error hidden"></div>
+
+  <section class="card" id="uploadSection">
+    <h2>1. Upload</h2>
+    <div class="row">
+      <div>
+        <div class="dropzone" id="essaysZone">
+          <div>📄 <strong>Essays folder</strong></div>
+          <div class="hint">Click to choose the essays/ folder, or drop PDFs here</div>
+          <input type="file" id="essaysInput" webkitdirectory multiple>
+        </div>
+        <div class="upload-status" id="essaysStatus"></div>
+      </div>
+      <div>
+        <div class="dropzone" id="csvZone">
+          <div>📋 <strong>Recruitment CSV</strong></div>
+          <div class="hint">Click to choose, or drop the export here</div>
+          <input type="file" id="csvInput" accept=".csv">
+        </div>
+        <div class="upload-status" id="csvStatus"></div>
+      </div>
+    </div>
+    <div class="roles-scope">
+      <div class="hint">Role scope (optional) — only narrows which "older rubric" essays get regraded. New or resubmitted essays are always graded in every role no matter what's checked here — role scope can never cause a first-time candidate to be left out of the report. Leave unchecked to regrade every role's stale grades.</div>
+      <label><input type="checkbox" class="roleCheckbox" value="LTC"> LTC</label>
+      <label><input type="checkbox" class="roleCheckbox" value="TFO"> TFO</label>
+      <label><input type="checkbox" class="roleCheckbox" value="TRI"> TRI</label>
+      <label><input type="checkbox" class="roleCheckbox" value="TFO TRI"> TFO TRI</label>
+    </div>
+    <div class="actions">
+      <button class="primary" id="previewBtn">Preview →</button>
+    </div>
+  </section>
+
+  <section class="card hidden" id="previewSection">
+    <h2>2. Confirm before grading</h2>
+    <div id="previewBody"></div>
+  </section>
+
+  <section class="card hidden" id="progressSection">
+    <h2>3. Running</h2>
+    <div class="step-label">Step: <strong id="stepLabel">—</strong></div>
+    <div class="progress-bar"><div id="progressFill"></div></div>
+    <div class="step-label" id="progressCount"></div>
+    <pre class="log" id="logTail"></pre>
+  </section>
+
+  <section class="card hidden" id="doneSection">
+    <h2 id="doneHeading">Done</h2>
+    <div id="doneBody"></div>
+  </section>
+</main>
+
+<script>
+(function () {
+  "use strict";
+
+  const $ = (id) => document.getElementById(id);
+  const STEP_LABELS = {
+    loading_essays: "Loading essays",
+    grading: "Sending essays to Claude",
+    plagiarism: "Screening for plagiarism",
+    embargo: "Checking the re-application embargo",
+    report: "Writing the Excel report",
+    complete: "Complete",
+  };
+
+  let pollTimer = null;
+  let selectedRoles = [];
+  let selectedFY = null;
+
+  function showError(message) {
+    const el = $("errorBanner");
+    if (!message) { el.classList.add("hidden"); el.textContent = ""; return; }
+    el.textContent = message;
+    el.classList.remove("hidden");
+  }
+
+  function showOnly(sectionId) {
+    ["uploadSection", "previewSection", "progressSection", "doneSection"].forEach((id) => {
+      $(id).classList.toggle("hidden", id !== sectionId && id !== "uploadSection");
+    });
+    // Upload stays visible throughout so a mid-run visitor can still see what was sent.
+    if (sectionId !== "uploadSection") $("uploadSection").classList.remove("hidden");
+  }
+
+  async function api(path, options) {
+    const res = await fetch(path, options);
+    let body = null;
+    try { body = await res.json(); } catch (e) { /* no body */ }
+    if (!res.ok) {
+      const detail = (body && body.detail) || res.statusText;
+      const err = new Error(detail);
+      err.status = res.status;
+      throw err;
+    }
+    return body;
+  }
+
+  async function refreshBanner(fy) {
+    try {
+      const query = fy ? "?fy=" + encodeURIComponent(fy) : "";
+      const status = await api("/api/status" + query);
+      if (selectedFY === null) {
+        // First load: seed the dropdown from config/campaign.txt's real value.
+        selectedFY = status.default_campaign;
+        $("fySelect").value = selectedFY;
+      }
+      const staleEl = $("staleBanner");
+      if (status.stale_warning) {
+        staleEl.textContent = "⚠ " + status.stale_warning;
+        staleEl.classList.remove("hidden");
+      } else {
+        staleEl.classList.add("hidden");
+      }
+      return status;
+    } catch (e) {
+      showError("Could not reach essaygrader2: " + e.message);
+      return null;
+    }
+  }
+
+  // ---------------------------------------------------------------- uploads
+  function wireDropzone(zoneId, inputId, onFiles) {
+    const zone = $(zoneId), input = $(inputId);
+    zone.addEventListener("click", () => input.click());
+    input.addEventListener("change", () => onFiles(input.files));
+    ["dragenter", "dragover"].forEach((evt) =>
+      zone.addEventListener(evt, (e) => { e.preventDefault(); zone.classList.add("drag"); })
+    );
+    ["dragleave", "drop"].forEach((evt) =>
+      zone.addEventListener(evt, (e) => { e.preventDefault(); zone.classList.remove("drag"); })
+    );
+    zone.addEventListener("drop", (e) => {
+      if (e.dataTransfer && e.dataTransfer.files.length) onFiles(e.dataTransfer.files);
+    });
+  }
+
+  async function uploadEssays(fileList) {
+    const statusEl = $("essaysStatus");
+    statusEl.classList.remove("error");
+    statusEl.textContent = "Uploading " + fileList.length + " file(s)…";
+    const form = new FormData();
+    for (const f of fileList) form.append("files", f);
+    try {
+      const result = await api("/api/upload/essays", { method: "POST", body: form });
+      statusEl.textContent = "✓ Replaced input/essays/ — " + result.count + " file(s)";
+    } catch (e) {
+      statusEl.classList.add("error");
+      statusEl.textContent = "✗ " + e.message;
+    }
+  }
+
+  async function uploadCsv(fileList) {
+    const statusEl = $("csvStatus");
+    statusEl.classList.remove("error");
+    if (!fileList.length) return;
+    statusEl.textContent = "Uploading…";
+    const form = new FormData();
+    form.append("file", fileList[0]);
+    try {
+      const result = await api("/api/upload/recruitment-csv", { method: "POST", body: form });
+      statusEl.textContent = "✓ Saved as " + result.filename;
+    } catch (e) {
+      statusEl.classList.add("error");
+      statusEl.textContent = "✗ " + e.message;
+    }
+  }
+
+  // ---------------------------------------------------------------- preview
+  function renderCounts(data) {
+    let html = "";
+    if (selectedRoles.length) {
+      html += "<div class=\"step-label\">Older-rubric regrade scoped to: <strong>" + selectedRoles.join(", ") + "</strong> (new/changed essays are always graded in every role, this scope never affects them)</div>";
+    }
+    html += "<table class=\"counts\">";
+    for (const row of data.counts) {
+      html += "<tr><td>" + row.label + "</td><td>" + row.count + "</td></tr>";
+    }
+    html += "</table>";
+
+    const warnings = [];
+    if (data.changed_candidates.length) {
+      warnings.push({
+        title: data.changed_candidates.length + " candidate(s) resubmitted a different file (ignores role scope):",
+        items: data.changed_candidates,
+      });
+    }
+    if (data.stale_extractions.length) {
+      warnings.push({
+        title: data.stale_extractions.length + " file(s) now extract differently but won't refresh:",
+        items: data.stale_extractions,
+      });
+    }
+    if (data.excluded_other_campaign.length) {
+      warnings.push({
+        title: data.excluded_other_campaign.length + " essay(s) belong to another campaign and are excluded:",
+        items: data.excluded_other_campaign.map((e) =>
+          e.candidate_number + "|" + e.role + " → " + e.belongs_to.join(", ")
+        ),
+      });
+    }
+    for (const w of warnings) {
+      html += "<div class=\"warn-list\">⚠ " + w.title + "<ul>";
+      for (const item of w.items.slice(0, 10)) html += "<li>" + item + "</li>";
+      if (w.items.length > 10) html += "<li>… and " + (w.items.length - 10) + " more</li>";
+      html += "</ul></div>";
+    }
+
+    if (!data.recruitment_list.found) {
+      html += "<div class=\"warn-list\">⚠ No recruitment list found — the re-application embargo will not be checked.</div>";
+    }
+
+    html += "<div class=\"actions\">";
+    if (data.would_grade_total === 0) {
+      html += "<div class=\"step-label\">Nothing to grade — every essay is served from cache.</div>";
+      html += "<button class=\"secondary\" id=\"runAllBtn\" data-scope=\"all\">Rebuild report anyway</button>";
+    } else {
+      html += "<button class=\"primary\" id=\"runAllBtn\" data-scope=\"all\">Grade all " + data.would_grade_total + "</button>";
+      if (data.can_narrow) {
+        html += "<button class=\"secondary\" id=\"runNewBtn\" data-scope=\"new\">Only the " + data.incremental_total + " new/changed</button>";
+      }
+      html += "<button class=\"secondary\" id=\"runReportOnlyBtn\">Rebuild report only (don't regrade)</button>";
+    }
+    html += "<button class=\"secondary\" id=\"cancelBtn\">Cancel</button>";
+    html += "</div>";
+
+    $("previewBody").innerHTML = html;
+    const runAll = $("runAllBtn");
+    if (runAll) runAll.addEventListener("click", () => startRun("all"));
+    const runNew = $("runNewBtn");
+    if (runNew) runNew.addEventListener("click", () => startRun("new"));
+    const runReportOnly = $("runReportOnlyBtn");
+    if (runReportOnly) runReportOnly.addEventListener("click", () => startRun(null, true));
+    $("cancelBtn").addEventListener("click", () => showOnly("uploadSection"));
+  }
+
+  async function runPreview() {
+    showError(null);
+    selectedRoles = Array.from(document.querySelectorAll(".roleCheckbox:checked")).map((el) => el.value);
+    $("previewBody").innerHTML = "<div class=\"step-label\">Loading preview…</div>";
+    showOnly("previewSection");
+    try {
+      const params = new URLSearchParams();
+      if (selectedRoles.length) params.set("roles", selectedRoles.join(","));
+      if (selectedFY) params.set("fy", selectedFY);
+      const query = params.toString() ? "?" + params.toString() : "";
+      const data = await api("/api/preview" + query);
+      renderCounts(data);
+    } catch (e) {
+      showOnly("uploadSection");
+      showError(e.message);
+    }
+  }
+
+  // --------------------------------------------------------------- progress
+  async function startRun(scope, reportOnly) {
+    try {
+      const body = { roles: selectedRoles, fy: selectedFY, report_only: !!reportOnly };
+      if (!reportOnly) body.scope = scope;
+      await api("/api/run", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      showOnly("progressSection");
+      pollStatus();
+    } catch (e) {
+      showError(e.message);
+    }
+  }
+
+  function renderJob(job) {
+    $("stepLabel").textContent = STEP_LABELS[job.step] || (job.step || "starting…");
+    if (job.total) {
+      $("progressFill").style.width = Math.round((job.graded / job.total) * 100) + "%";
+      $("progressCount").textContent = job.graded + " / " + job.total + " graded";
+    } else {
+      $("progressCount").textContent = "";
+    }
+    $("logTail").textContent = job.log_tail.join("\n");
+    $("logTail").scrollTop = $("logTail").scrollHeight;
+  }
+
+  function renderDone(job) {
+    clearInterval(pollTimer);
+    pollTimer = null;
+    if (job.state === "done") {
+      $("doneHeading").textContent = "✅ Done";
+      const reportQuery = job.fy ? "?fy=" + encodeURIComponent(job.fy) : "";
+      $("doneBody").innerHTML =
+        "<p>Report and cache updated in output/.</p>" +
+        "<a class=\"download-link\" href=\"/api/report" + reportQuery + "\">Download grading report</a>";
+    } else {
+      $("doneHeading").textContent = "✗ Run failed";
+      $("doneBody").innerHTML =
+        "<p>See the log below, or check output/run_sonnet.log.</p>" +
+        "<pre class=\"log\">" + job.log_tail.join("\n") + "</pre>" +
+        "<div class=\"actions\"><button class=\"primary\" id=\"retryBtn\">Back to preview</button></div>";
+      const retry = $("retryBtn");
+      if (retry) retry.addEventListener("click", runPreview);
+    }
+    showOnly("doneSection");
+    refreshBanner();
+  }
+
+  async function pollStatus() {
+    try {
+      const status = await api("/api/status");
+      const job = status.job;
+      if (job.state === "running") {
+        renderJob(job);
+        if (!pollTimer) pollTimer = setInterval(pollStatus, 2000);
+      } else if (job.state === "done" || job.state === "error") {
+        renderDone(job);
+      }
+    } catch (e) {
+      showError(e.message);
+    }
+  }
+
+  // --------------------------------------------------------------------- init
+  wireDropzone("essaysZone", "essaysInput", uploadEssays);
+  wireDropzone("csvZone", "csvInput", uploadCsv);
+  $("previewBtn").addEventListener("click", runPreview);
+  $("fySelect").addEventListener("change", () => {
+    selectedFY = $("fySelect").value;
+    refreshBanner(selectedFY);
+  });
+  $("logout").addEventListener("click", () => {
+    fetch("/logout", { method: "POST" }).then(() => { window.location.href = "/login"; });
+  });
+
+  refreshBanner().then((status) => {
+    if (status && status.job && status.job.state === "running") {
+      showOnly("progressSection");
+      pollStatus();
+    }
+  });
+})();
+</script>
+</body>
+</html>

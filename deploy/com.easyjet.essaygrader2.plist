@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  launchd template: keep essaygrader2's web app running, restarting it on
+  crash or after a reboot/login. Modeled on lessonplanner's own plist
+  (deploy/com.easyjet.lessonplanner.plist) — same structure, same install
+  convention, this app's own port.
+
+  BEFORE USING, replace the two placeholders:
+    __PROJECT_DIR__  -> absolute path to this project, e.g. /Users/you/essaygrader2
+    __USERNAME__     -> your macOS short username, e.g. you
+
+  Then install it as a per-user agent (no sudo, starts at login):
+    cp deploy/com.easyjet.essaygrader2.plist ~/Library/LaunchAgents/
+    launchctl load  ~/Library/LaunchAgents/com.easyjet.essaygrader2.plist
+    launchctl start com.easyjet.essaygrader2        # start now, without logging out
+
+  Stop / uninstall:
+    launchctl stop   com.easyjet.essaygrader2
+    launchctl unload ~/Library/LaunchAgents/com.easyjet.essaygrader2.plist
+
+  Logs are written under the project's logs/ directory.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.easyjet.essaygrader2</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>__PROJECT_DIR__/deploy/run_server.sh</string>
+    </array>
+
+    <!-- run_server.sh cd's here anyway; set it too so launchd's own CWD is correct. -->
+    <key>WorkingDirectory</key>
+    <string>__PROJECT_DIR__</string>
+
+    <!-- Homebrew (Apple Silicon: /opt/homebrew/bin) puts node/npm/python on PATH.
+         PORT=8002: ports 8000 and 8001 are already used on this machine by
+         Flight Plan Inspector and lessonplanner respectively — the Funnel
+         setup maps public :10000 to this port (see deploy/README.md). -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>PORT</key>
+        <string>8002</string>
+    </dict>
+
+    <!-- Start at load/login and restart if it ever exits. -->
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>__PROJECT_DIR__/logs/launchd.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>__PROJECT_DIR__/logs/launchd.err.log</string>
+
+    <key>UserName</key>
+    <string>__USERNAME__</string>
+</dict>
+</plist>

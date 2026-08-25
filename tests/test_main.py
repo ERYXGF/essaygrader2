@@ -258,6 +258,94 @@ class TestConfirmGrading(unittest.TestCase):
         with mock.patch("builtins.input", side_effect=AssertionError("prompted!")):
             self.assertEqual(main._confirm_grading([]), [])
 
+    def test_scope_all_grades_everything_without_prompting(self):
+        """The web UI's confirm step already asked; this must not ask again."""
+        with mock.patch("builtins.input", side_effect=AssertionError("prompted!")):
+            chosen = main._confirm_grading(
+                self._classified(new=4, stale=154), scope="all"
+            )
+        self.assertEqual(len(chosen), 158)
+
+    def test_scope_new_narrows_to_incremental_without_prompting(self):
+        with mock.patch("builtins.input", side_effect=AssertionError("prompted!")):
+            chosen = main._confirm_grading(
+                self._classified(new=4, stale=154), scope="new"
+            )
+        self.assertEqual(len(chosen), 4)
+        self.assertTrue(all(e["candidate_number"].startswith("n") for e in chosen))
+
+    def test_scope_new_falls_back_to_all_when_nothing_to_narrow(self):
+        """Mirrors the CLI's [o] option: offered only when there's something to skip."""
+        with mock.patch("builtins.input", side_effect=AssertionError("prompted!")):
+            chosen = main._confirm_grading(self._classified(new=3), scope="new")
+        self.assertEqual(len(chosen), 3)
+
+    def test_scope_ignored_when_nothing_to_grade(self):
+        with mock.patch("builtins.input", side_effect=AssertionError("prompted!")):
+            self.assertEqual(main._confirm_grading([], scope="all"), [])
+
+
+class TestPreview(unittest.TestCase):
+    """Structured, JSON-shaped counterpart to --dry-run for a non-terminal caller.
+
+    Built on the same classify() the CLI dry-run and the real run both use, so
+    it cannot promise a web caller something a real run would not do.
+    """
+
+    def _run(self, essays, cache_data=None, roles=None, fy="FY26"):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            (base / "input" / "essays").mkdir(parents=True)
+            (base / "output").mkdir(parents=True)
+            if cache_data is not None:
+                gc.save_cache(str(base / "output" / "grading_cache.json"), cache_data)
+
+            with mock.patch.object(main, "load_essays", return_value=essays), \
+                 mock.patch.object(main, "__file__", str(base / "src" / "main.py")), \
+                 mock.patch.object(
+                     main, "find_export",
+                     side_effect=FileNotFoundError("no export"),
+                 ):
+                return main.preview(roles=roles, fy=fy)
+
+    def test_matches_what_dry_run_would_report(self):
+        data = self._run([_essay("1", "LTC", "aaa"), _essay("2", "TRI", "bbb")])
+        self.assertEqual(data["campaign"], "FY26")
+        self.assertEqual(data["would_grade_total"], 2)
+        self.assertEqual(data["incremental_total"], 2)
+        self.assertEqual({c["reason"] for c in data["counts"]}, {gc.REASON_NEW})
+        self.assertEqual(data["counts"][0]["label"], gc.REASON_LABELS[gc.REASON_NEW])
+
+    def test_can_narrow_matches_the_cli_s_offer_condition(self):
+        """can_narrow is true exactly when the CLI's [o] option would appear."""
+        cache = gc._empty_cache()
+        seeded = [_essay("1", "LTC", "aaa", file_hash="F1")]
+        gc.merge_and_update(
+            cache, seeded, [(seeded[0], {"candidate_number": "1"})], "OLD", "v1.0",
+        )
+        essays = seeded + [_essay("2", "TRI", "new one", file_hash="F2")]
+        data = self._run(essays, cache_data=cache)
+        self.assertTrue(data["can_narrow"])
+        self.assertEqual(data["incremental_total"], 1)
+        self.assertEqual(data["would_grade_total"], 2)
+
+    def test_no_essays_to_narrow_reports_false(self):
+        data = self._run([_essay("1", "LTC", "aaa")])
+        self.assertFalse(data["can_narrow"])
+
+    def test_missing_recruitment_list_is_reported_not_raised(self):
+        data = self._run([_essay("1", "LTC", "aaa")])
+        self.assertFalse(data["recruitment_list"]["found"])
+
+    def test_raises_the_same_error_load_essays_does(self):
+        """A missing/malformed input/essays/ must fail the same way for both callers."""
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            (base / "output").mkdir(parents=True)
+            with mock.patch.object(main, "__file__", str(base / "src" / "main.py")):
+                with self.assertRaises(FileNotFoundError):
+                    main.preview(fy="FY26")
+
 
 class TestEmbargoWiring(unittest.TestCase):
     """The embargo annotates results; it never blocks or skips a candidate."""
@@ -418,6 +506,41 @@ class TestArgParsing(unittest.TestCase):
         self.assertIsNone(main._parse_args([]).recruitment_list)
         args = main._parse_args(["--recruitment-list", "/tmp/list.csv"])
         self.assertEqual(args.recruitment_list, "/tmp/list.csv")
+
+    def test_grade_scope_defaults_to_none_and_parses(self):
+        self.assertIsNone(main._parse_args([]).grade_scope)
+        self.assertEqual(
+            main._parse_args(["--grade-scope", "new"]).grade_scope, "new"
+        )
+        self.assertEqual(
+            main._parse_args(["--grade-scope", "all"]).grade_scope, "all"
+        )
+
+    def test_grade_scope_rejects_unknown_values(self):
+        with self.assertRaises(SystemExit):
+            main._parse_args(["--grade-scope", "bogus"])
+
+
+class TestParseRoles(unittest.TestCase):
+    """Shared by the CLI's --roles flag and the web layer's roles query param."""
+
+    def test_none_and_empty_string_are_unscoped(self):
+        self.assertIsNone(main.parse_roles(None))
+        self.assertIsNone(main.parse_roles(""))
+
+    def test_single_role(self):
+        self.assertEqual(main.parse_roles("tri"), {"TRI"})
+
+    def test_comma_separated_roles(self):
+        self.assertEqual(main.parse_roles("TRI,TFO"), {"TRI", "TFO"})
+
+    def test_a_role_containing_a_space_is_preserved(self):
+        """'TFO TRI' is one role name, not two roles split on the space."""
+        self.assertEqual(main.parse_roles("TFO TRI"), {"TFO TRI"})
+        self.assertEqual(main.parse_roles("TRI,TFO TRI"), {"TRI", "TFO TRI"})
+
+    def test_surrounding_whitespace_and_blank_entries_are_ignored(self):
+        self.assertEqual(main.parse_roles(" TRI , , TFO "), {"TRI", "TFO"})
 
 
 if __name__ == "__main__":

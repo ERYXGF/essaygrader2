@@ -18,3 +18,9 @@ pypdfium2==5.9.0
 # src/ocr.py degrades to the PDF's embedded text if this cannot be imported, so
 # the pipeline still runs on other platforms.
 pyobjc-framework-Vision==12.2.1; sys_platform == "darwin"
+
+# web/ — hosts the pipeline behind a FastAPI app (see web/app.py), the same
+# architecture the lessonplanner and flight-plan-inspector apps already use.
+fastapi>=0.110,<1.0
+uvicorn[standard]>=0.27,<1.0
+python-multipart>=0.0.9,<1.0   # required by FastAPI for multipart file uploads

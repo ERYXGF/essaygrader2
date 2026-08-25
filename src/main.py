@@ -76,7 +76,9 @@ def _print_breakdown(counts, grade_label: str, reuse_label: str) -> None:
             print(f"      {count:4d}  {REASON_LABELS[reason]}")
 
 
-def _confirm_grading(classified: list, assume_yes: bool = False) -> list:
+def _confirm_grading(
+    classified: list, assume_yes: bool = False, scope: Optional[str] = None
+) -> list:
     """Asks before spending, and returns the essays to grade.
 
     Returns every essay to grade, only the new/changed ones, or an empty list
@@ -88,12 +90,22 @@ def _confirm_grading(classified: list, assume_yes: bool = False) -> list:
     skip. Where all the work is new it would be a choice between a thing and
     itself.
 
+    `scope` ("all" or "new") makes that same decision non-interactively — the
+    web UI's confirm step already asked, off its own preview() of this same
+    classification, so this must not ask again on stdin.
+
     A non-interactive run proceeds with everything, as it always did — blocking
     a scripted run on a prompt nobody can answer would be worse than the problem
     this solves.
     """
     to_grade = [e for e, r in classified if r in GRADE_REASONS]
     if not to_grade or assume_yes:
+        return to_grade
+
+    if scope in ("all", "new"):
+        incremental = [e for e, r in classified if r in INCREMENTAL_REASONS]
+        if scope == "new" and 0 < len(incremental) < len(to_grade):
+            return incremental
         return to_grade
 
     if not sys.stdin.isatty():
@@ -133,6 +145,37 @@ def _confirm_grading(classified: list, assume_yes: bool = False) -> list:
         print("   Please answer " + ("y, o or n." if can_narrow else "y or n."))
 
 
+def _dry_run_data(
+    essays: list, cache: dict, current_prompt_hash: str, roles, campaign: str = "",
+) -> dict:
+    """Classifies essays and tallies the result, without printing or grading.
+
+    Shared by the CLI's --dry-run report and the web preview endpoint, so
+    neither can promise something classify() would not actually do.
+    """
+    classified = classify(essays, cache, current_prompt_hash, roles, campaign)
+    counts = Counter(reason for _, reason in classified)
+    would_grade = sum(counts[r] for r in GRADE_REASONS)
+    incremental = sum(counts[r] for r in INCREMENTAL_REASONS)
+    other_campaigns = 0
+    if campaign:
+        other_campaigns = sum(
+            1 for e in cache.get("candidates", {}).values()
+            if campaign_of(e) != campaign
+        )
+    return {
+        "classified": classified,
+        "counts": counts,
+        "would_grade_total": would_grade,
+        "incremental_total": incremental,
+        # Offered only when there's something to skip — see _confirm_grading.
+        "can_narrow": 0 < incremental < would_grade,
+        # Resubmissions bypass --roles, so callers name them rather than count.
+        "changed_candidates": [e for e, r in classified if r == REASON_CHANGED],
+        "other_campaigns_excluded": other_campaigns,
+    }
+
+
 def _report_dry_run(
     essays: list, cache: dict, current_prompt_hash: str, version: str, roles,
     campaign: str = "",
@@ -142,18 +185,15 @@ def _report_dry_run(
     Reads the same classify() the real run uses, so the report cannot drift
     from what would actually happen.
     """
-    classified = classify(essays, cache, current_prompt_hash, roles, campaign)
-    counts = Counter(reason for _, reason in classified)
-    would_grade = sum(counts[r] for r in GRADE_REASONS)
+    data = _dry_run_data(essays, cache, current_prompt_hash, roles, campaign)
+    counts = data["counts"]
+    would_grade = data["would_grade_total"]
 
     print()
     print("🔎 Dry run — nothing will be graded, no API calls made")
     print(f"   Rubric: {version or '(unversioned)'}")
     if campaign:
-        other = sum(
-            1 for e in cache.get("candidates", {}).values()
-            if campaign_of(e) != campaign
-        )
+        other = data["other_campaigns_excluded"]
         print(f"   Campaign: {campaign}" + (
             f" ({other} cached grade(s) from earlier campaigns excluded)"
             if other else ""
@@ -163,8 +203,7 @@ def _report_dry_run(
     print()
     _print_breakdown(counts, "Would grade", "Would reuse")
 
-    # Resubmissions bypass --roles, so name them rather than just counting.
-    changed = [e for e, r in classified if r == REASON_CHANGED]
+    changed = data["changed_candidates"]
     if changed:
         print()
         print(
@@ -178,6 +217,84 @@ def _report_dry_run(
 
     print()
     print(f"   → {would_grade} API call(s) if run for real. Nothing was spent.")
+
+
+def preview(
+    roles: Optional[Set[str]] = None,
+    fy: Optional[str] = None,
+    recruitment_list: Optional[str] = None,
+) -> dict:
+    """Structured counterpart to --dry-run, for a caller that isn't a terminal.
+
+    Mirrors run_pipeline's own setup (paths, campaign, essays, recruitment
+    list, cache, fingerprint) so what it promises can't drift from what a real
+    run — kicked off right after, on the strength of this preview — would
+    actually do. Raises the same FileNotFoundError/ValueError load_essays()
+    does on a missing or malformed input/essays/, exactly as the CLI does.
+    """
+    base_dir = Path(__file__).resolve().parent.parent
+    essays_dir = base_dir / "input" / "essays"
+    output_dir = base_dir / "output"
+    cache_file = output_dir / "grading_cache.json"
+
+    override = (fy or "").strip().upper()
+    campaign = override or active_campaign()
+    source = "--fy" if override else "config/campaign.txt"
+
+    essays = load_essays(str(essays_dir))
+
+    applications = None
+    recruitment_info = {"found": False, "filename": None, "skipped_rows": 0}
+    try:
+        list_file = Path(recruitment_list) if recruitment_list else find_export()
+        applications, skipped = load_recruitment_list(list_file)
+        recruitment_info = {
+            "found": True, "filename": list_file.name, "skipped_rows": skipped,
+        }
+    except FileNotFoundError:
+        pass
+
+    essays, excluded = _check_campaign_membership(essays, campaign, applications)
+
+    cache = load_cache(str(cache_file))
+    prompt_text = _load_grading_prompt()
+    current_prompt_hash = fingerprint(prompt_text, DEFAULT_MODEL)
+    version = rubric_version(prompt_text)
+
+    data = _dry_run_data(essays, cache, current_prompt_hash, roles, campaign)
+    counts = data["counts"]
+
+    return {
+        "campaign": campaign,
+        "campaign_source": source,
+        "looks_stale": looks_stale(campaign),
+        "rubric_version": version or "",
+        "counts": [
+            {"reason": reason, "label": REASON_LABELS[reason], "count": counts[reason]}
+            for reason in list(GRADE_REASONS)
+            + [r for r in REASON_LABELS if r not in GRADE_REASONS]
+            if counts[reason]
+        ],
+        "would_grade_total": data["would_grade_total"],
+        "incremental_total": data["incremental_total"],
+        "can_narrow": data["can_narrow"],
+        "changed_candidates": [
+            f"{e['candidate_number']}|{e['role']}" for e in data["changed_candidates"]
+        ],
+        "stale_extractions": [
+            f"{e['candidate_number']}|{e['role']}"
+            for e in stale_extractions(essays, cache, campaign)
+        ],
+        "excluded_other_campaign": [
+            {
+                "candidate_number": essay["candidate_number"],
+                "role": essay["role"],
+                "belongs_to": found,
+            }
+            for essay, found in excluded
+        ],
+        "recruitment_list": recruitment_info,
+    }
 
 
 def _warn_stale_extractions(essays: list, cache: dict, campaign: str = "") -> None:
@@ -379,6 +496,7 @@ def run_pipeline(
     fy: Optional[str] = None,
     recruitment_list: Optional[str] = None,
     assume_yes: bool = False,
+    grade_scope: Optional[str] = None,
 ) -> None:
     # ============================================================
     # PATHS  (project root = parent of src/)
@@ -495,7 +613,7 @@ def run_pipeline(
 
     if to_grade:
         # The last point at which this run is still free.
-        to_grade = _confirm_grading(classified, assume_yes)
+        to_grade = _confirm_grading(classified, assume_yes, grade_scope)
         if not to_grade:
             print("   ✋ Cancelled — nothing was graded, no report written.")
             return
@@ -633,6 +751,18 @@ def _parse_args(argv=None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--grade-scope",
+        choices=("all", "new"),
+        default=None,
+        help=(
+            "Answers the run confirmation non-interactively: 'all' grades "
+            "everything due, 'new' grades only the new/changed essays (falling "
+            "back to 'all' when there's nothing to narrow). Used by the web "
+            "UI, which already showed the same breakdown --dry-run would and "
+            "asked."
+        ),
+    )
+    parser.add_argument(
         "--recruitment-list",
         default=None,
         help=(
@@ -646,18 +776,25 @@ def _parse_args(argv=None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def parse_roles(raw: Optional[str]) -> Optional[Set[str]]:
+    """Comma-separated roles, e.g. 'TRI,TFO TRI', to the set classify() expects.
+
+    Shared by the CLI's own --roles flag and the web layer, so a role string
+    typed into a browser and one typed on the command line can't drift apart.
+    """
+    if not raw:
+        return None
+    return {r.strip().upper() for r in raw.split(",") if r.strip()}
+
+
 if __name__ == "__main__":
     args = _parse_args()
-    selected = (
-        {r.strip().upper() for r in args.roles.split(",") if r.strip()}
-        if args.roles
-        else None
-    )
     run_pipeline(
-        roles=selected,
+        roles=parse_roles(args.roles),
         dry_run=args.dry_run,
         report_only=args.report_only,
         fy=args.fy,
         recruitment_list=args.recruitment_list,
         assume_yes=args.yes,
+        grade_scope=args.grade_scope,
     )

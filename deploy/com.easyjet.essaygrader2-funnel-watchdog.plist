@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  launchd template: runs deploy/funnel_watchdog.sh every 5 minutes to detect
+  and self-heal a stale Tailscale Funnel entry for essaygrader2. Modeled on
+  lessonplanner's funnel-watchdog plist. See funnel_watchdog.sh's own header
+  comment for why this watchdog must never call the global `tailscale funnel
+  reset` — only flight-plan-inspector's watchdog is allowed that, as owner of
+  the bare hostname.
+
+  BEFORE USING, replace the two placeholders:
+    __PROJECT_DIR__  -> absolute path to this project
+    __USERNAME__     -> your macOS short username
+
+  Install alongside com.easyjet.essaygrader2.plist:
+    cp deploy/com.easyjet.essaygrader2-funnel-watchdog.plist ~/Library/LaunchAgents/
+    launchctl load  ~/Library/LaunchAgents/com.easyjet.essaygrader2-funnel-watchdog.plist
+    launchctl start com.easyjet.essaygrader2-funnel-watchdog
+
+  Stop / uninstall:
+    launchctl stop   com.easyjet.essaygrader2-funnel-watchdog
+    launchctl unload ~/Library/LaunchAgents/com.easyjet.essaygrader2-funnel-watchdog.plist
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.easyjet.essaygrader2-funnel-watchdog</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>__PROJECT_DIR__/deploy/funnel_watchdog.sh</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>__PROJECT_DIR__</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+
+    <!-- Every 5 minutes, not RunAtLoad/KeepAlive — this is a periodic check,
+         not a long-running server. -->
+    <key>StartInterval</key>
+    <integer>300</integer>
+
+    <key>StandardOutPath</key>
+    <string>__PROJECT_DIR__/logs/funnel_watchdog.log</string>
+    <key>StandardErrorPath</key>
+    <string>__PROJECT_DIR__/logs/funnel_watchdog.log</string>
+
+    <key>UserName</key>
+    <string>__USERNAME__</string>
+</dict>
+</plist>

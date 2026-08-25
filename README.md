@@ -93,6 +93,14 @@ essaygrader2/
 │   ├── test_grading_cache.py
 │   └── ...
 │
+├── web/                           # FastAPI wrapper for hosting this as a web app
+│   ├── app.py                     # routes, auth gate, static index page
+│   ├── jobs.py                    # runs `python src/main.py` as a background job
+│   ├── uploads.py                 # essays-folder / recruitment-CSV upload handling
+│   └── static/index.html          # the single-page UI (no build step)
+│
+├── deploy/                        # launchd + Tailscale Funnel hosting (see deploy/README.md)
+│
 ├── .env                           # ANTHROPIC_API_KEY (gitignored)
 ├── .env.example                   # template for .env
 ├── requirements.txt
@@ -195,7 +203,19 @@ run (no terminal) proceeds without asking, as does `--yes`.
 | `--roles TRI` or `--roles TRI,TFO` | Scopes a rubric-driven **regrade** to particular roles. New and edited submissions are always graded whatever their role — scoping never suppresses new work, or the report would silently gain a hole. |
 | `--fy FY26` | Reports on a specific campaign, overriding `config/campaign.txt` for one run. Earlier campaigns stay cached, so a past year's report can be regenerated at any time. |
 | `-y`, `--yes` | Grade without asking for confirmation. For scripts; interactively you want the prompt. |
+| `--grade-scope {all,new}` | Answers the run confirmation non-interactively without needing `-y`: `all` grades everything due, `new` grades only the new/changed essays (same choice as `[o]` above). Mainly used by the web UI — see below. |
 | `--recruitment-list PATH` | Uses a specific export instead of the newest one found in `input/`. |
+
+---
+
+## Hosting as a web app
+
+`web/` wraps this same pipeline in a small FastAPI app — upload the essays folder and the
+recruitment CSV from a browser, preview what a run would grade (the same `[y]`/`[o]`/`[n]`
+choice above, as buttons), watch it run, and download the finished report. It shells out to
+`python src/main.py --grade-scope ...` for the actual run, so behavior can never drift from
+the command line above. See `deploy/README.md` for running it locally (`venv/bin/uvicorn
+web.app:app --port 8002`) or hosting it permanently via launchd + Tailscale Funnel.
 
 ---
 
