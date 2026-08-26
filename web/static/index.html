@@ -399,11 +399,40 @@
     }
   }
 
+  // Coarse on purpose: a run measured in hours is not more predictable for
+  // being told it has 1847 seconds left. Matches progress.py's _fmt_duration.
+  function formatDuration(seconds) {
+    const total = Math.max(0, Math.round(seconds));
+    if (total < 60) return total + "s";
+    const minutes = Math.floor(total / 60);
+    if (minutes < 60) return minutes + "m";
+    return Math.floor(minutes / 60) + "h" + String(minutes % 60).padStart(2, "0") + "m";
+  }
+
+  // The estimate is computed here rather than shipped through the pipeline's
+  // stdout: graded, total and started_at are already in the status payload, so
+  // nothing extra has to cross that boundary to work this out.
+  function estimateRemaining(job) {
+    if (!job.total || !job.started_at || job.graded < 3) return null;
+    const remaining = job.total - job.graded;
+    if (remaining <= 0) return null;
+    const elapsed = Date.now() / 1000 - job.started_at;
+    return (elapsed / job.graded) * remaining;
+  }
+
   function renderJob(job) {
     $("stepLabel").textContent = STEP_LABELS[job.step] || (job.step || "starting…");
     if (job.total) {
       $("progressFill").style.width = Math.round((job.graded / job.total) * 100) + "%";
-      $("progressCount").textContent = job.graded + " / " + job.total + " graded";
+      const parts = [job.graded + " / " + job.total + " graded"];
+      const eta = estimateRemaining(job);
+      // Held back until three essays are in: a projection off one call is a
+      // guess wearing a number's clothes.
+      if (eta !== null) parts.push("~" + formatDuration(eta) + " left");
+      // Only while grading — afterwards this names whoever finished last,
+      // which would read as though the run were stuck on them.
+      if (job.current && job.step === "grading") parts.push(job.current);
+      $("progressCount").textContent = parts.join("  ·  ");
     } else {
       $("progressCount").textContent = "";
     }

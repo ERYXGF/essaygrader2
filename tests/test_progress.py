@@ -364,6 +364,64 @@ class TestModuleLog(TestRegistryIsLeftClean):
 
 
 # ------------------------------------------------------------
+# The contract with web/jobs.py
+# ------------------------------------------------------------
+class TestParseProgress(TestRegistryIsLeftClean):
+    """The web app follows a run by parsing the non-TTY lines this module
+    prints. These tests are what stop the two drifting apart: the web app has
+    no regex of its own any more, and this is the round trip that proves the
+    printed line and the parser still agree."""
+
+    def _emitted(self, message: str, total: int = 154) -> str:
+        """One real line, printed by a real non-TTY Bar."""
+        stream = FakeStream(tty=False)
+        with progress.Bar(total, stream=stream, width=100) as bar:
+            bar.advance(message)
+        return stream.getvalue().splitlines()[0]
+
+    def test_a_completed_grade_round_trips(self):
+        line = self._emitted("✓ 860775 TRI   Priority Interview                      31s")
+        self.assertEqual(progress.parse_progress(line), (1, 154, "860775 TRI"))
+
+    def test_a_skipped_submission_round_trips(self):
+        line = self._emitted("! 860003 TRI   skipped — '860003_x.docx' could not be read")
+        self.assertEqual(progress.parse_progress(line), (1, 154, "860003 TRI"))
+
+    def test_it_tracks_a_whole_batch(self):
+        stream = FakeStream(tty=False)
+        with progress.Bar(3, stream=stream, width=100) as bar:
+            for n in range(3):
+                bar.advance(f"✓ 86000{n} TRI   Maybe   1s")
+        parsed = [progress.parse_progress(l) for l in stream.getvalue().splitlines()]
+        self.assertEqual([p[:2] for p in parsed], [(1, 3), (2, 3), (3, 3)])
+
+    def test_everything_else_the_pipeline_prints_is_not_progress(self):
+        for line in [
+            "🚀 Pipeline starting...",
+            "   ✓ Loaded 154 essay(s)",
+            "   ✓ 2 pair(s) flagged for review",
+            "      154  older rubric",
+            "  -> Reviewing pair 850263 <-> 850327 (lexical 3%, semantic 75%)",
+            "     ! ConnectionError (attempt 1/4); retrying in 2s...",
+            "     ! Could not obtain valid JSON for grading response after 3 attempts.",
+            "📤 Sending essays to Claude...",
+            "",
+        ]:
+            with self.subTest(line=line):
+                self.assertIsNone(progress.parse_progress(line))
+
+    def test_a_drawn_bar_is_not_mistaken_for_progress(self):
+        """A live bar's line also contains "47/154", but it never reaches a
+        pipe. If one ever did, it must not be read as an item completing."""
+        bar = progress.Bar(154, stream=FakeStream(), width=100)
+        try:
+            bar.done = 47
+            self.assertIsNone(progress.parse_progress(bar._line()))
+        finally:
+            bar.close()
+
+
+# ------------------------------------------------------------
 # Cleanup
 # ------------------------------------------------------------
 class TestCleanup(TestRegistryIsLeftClean):

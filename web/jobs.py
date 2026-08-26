@@ -9,6 +9,12 @@ differently from `python src/main.py` on the command line, because it IS
 that command line. Progress comes free from the pipeline's own print()
 statements — no callback needs threading through run_pipeline/grade_essays.
 
+Reading progress out of printed text is only safe while both sides agree on
+the format, so they share one definition of it: `progress.parse_progress`,
+next to the code that prints the line. This module deliberately owns no regex
+of its own for it. A pipe is never a terminal, so the pipeline draws no
+progress bar here and prints the plain per-essay lines that parser expects.
+
 Only one run at a time: the pipeline reads and writes the same
 output/grading_cache.json and input/essays/ on every run, so two at once
 would corrupt each other's work. JOB is a single process-wide slot, which is
@@ -16,13 +22,15 @@ enough for a single-process, single-user app.
 """
 from __future__ import annotations
 
-import re
 import subprocess
 import threading
 import time
 from typing import List, Optional
 
 from paths import MAIN_PY, PROJECT_ROOT, VENV_PYTHON
+# src/ is on sys.path by the time this module is imported — web/app.py puts it
+# there before importing us, the same way `from paths import ...` above works.
+from progress import parse_progress
 
 # Matches the pipeline's own emoji-prefixed step announcements in main.py.
 _STEP_MARKERS = [
@@ -33,8 +41,6 @@ _STEP_MARKERS = [
     ("📝 Writing Excel report", "report"),
     ("✅ Pipeline complete!", "complete"),
 ]
-# Matches essay_grader.py's "  → Grading 12/45 (...)" / "  → Skipping 3/45 (...)".
-_PROGRESS_RE = re.compile(r"→\s*(?:Grading|Skipping)\s+(\d+)\s*/\s*(\d+)")
 
 _LOG_TAIL_KEPT = 500  # lines retained server-side; /api/status returns a shorter tail
 
@@ -55,6 +61,9 @@ class _JobState:
         self.step: Optional[str] = None
         self.graded = 0
         self.total = 0
+        # The candidate the last progress line named, so the UI can show who
+        # the run is on rather than only how many are done.
+        self.current: Optional[str] = None
         self.log_lines: List[str] = []
         self.started_at: Optional[float] = None
         self.finished_at: Optional[float] = None
@@ -71,6 +80,7 @@ class _JobState:
                 "step": self.step,
                 "graded": self.graded,
                 "total": self.total,
+                "current": self.current,
                 "log_tail": list(self.log_lines[-log_tail:]),
                 "started_at": self.started_at,
                 "finished_at": self.finished_at,
@@ -117,6 +127,27 @@ def start_run(
     return True
 
 
+def consume_line(line: str) -> None:
+    """Folds one line of the pipeline's stdout into JOB.
+
+    Separate from _run so it can be tested against a real captured transcript
+    without launching a subprocess — which is the only way to catch the
+    pipeline's output format drifting away from what this reads.
+    """
+    with JOB._lock:
+        JOB.log_lines.append(line)
+        overflow = len(JOB.log_lines) - _LOG_TAIL_KEPT
+        if overflow > 0:
+            del JOB.log_lines[:overflow]
+        for marker, step in _STEP_MARKERS:
+            if marker in line:
+                JOB.step = step
+                break
+        progress = parse_progress(line)
+        if progress is not None:
+            JOB.graded, JOB.total, JOB.current = progress
+
+
 def _run(
     scope: str,
     roles: Optional[str] = None,
@@ -141,19 +172,7 @@ def _run(
     assert proc.stdout is not None
     try:
         for raw_line in proc.stdout:
-            line = raw_line.rstrip("\n")
-            with JOB._lock:
-                JOB.log_lines.append(line)
-                overflow = len(JOB.log_lines) - _LOG_TAIL_KEPT
-                if overflow > 0:
-                    del JOB.log_lines[:overflow]
-                for marker, step in _STEP_MARKERS:
-                    if marker in line:
-                        JOB.step = step
-                        break
-                match = _PROGRESS_RE.search(line)
-                if match:
-                    JOB.graded, JOB.total = int(match.group(1)), int(match.group(2))
+            consume_line(raw_line.rstrip("\n"))
         exit_code = proc.wait()
     except Exception:
         proc.kill()

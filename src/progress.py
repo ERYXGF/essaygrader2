@@ -26,10 +26,11 @@ Two things shape the design more than the drawing does:
 Presentation only. Nothing here decides anything the cache or the report reads.
 """
 
+import re
 import shutil
 import sys
 import time
-from typing import List, Optional, TextIO
+from typing import List, Optional, TextIO, Tuple
 
 # The bar glyphs, and their ASCII stand-ins. plagiarism_checker already records
 # that Windows consoles running cp1252 choke on non-ASCII glyphs; a bar drawn
@@ -53,6 +54,38 @@ MIN_SAMPLES_FOR_ETA = 3
 # rather than a single slot: grading and plagiarism never overlap today, but a
 # bar that quietly unregisters someone else's is a bad way to find that out.
 _stack: List["Bar"] = []
+
+
+# ============================================================
+# THE NON-TERMINAL LINE, AND ITS PARSER
+# ============================================================
+# When stdout is not a terminal there is no bar, and `advance()` prints one
+# line per item carrying the counter that would have been in it:
+#
+#     "  47/154  ✓ 860775 TRI   Priority Interview                     31s"
+#     "  48/154  ! 860003 TRI   skipped — '860003_x.docx' could not be read"
+#
+# The web app (web/jobs.py) runs the pipeline as a subprocess — a pipe, so
+# never a terminal — and reads progress out of exactly these lines. It imports
+# the parser below rather than writing its own regex, because a scraped format
+# with two definitions in two files is a format that breaks silently: the
+# printed line changes, nothing errors, and the browser's bar simply stops
+# moving. One definition, and a test that round-trips it against real output,
+# is what stops that happening twice.
+PROGRESS_RE = re.compile(r"^\s*(\d+)/(\d+)\s+[✓!]\s+(\S+(?: \S+)?)")
+
+
+def parse_progress(line: str) -> Optional[Tuple[int, int, str]]:
+    """`(done, total, label)` from a non-terminal progress line, else None.
+
+    Every other line the pipeline prints — step announcements, retry warnings,
+    the plagiarism screen's pair lines — returns None, so a caller can feed it
+    the whole stream.
+    """
+    match = PROGRESS_RE.match(line)
+    if match is None:
+        return None
+    return int(match.group(1)), int(match.group(2)), match.group(3)
 
 
 def active() -> Optional["Bar"]:
@@ -186,6 +219,10 @@ class Bar:
         because off a terminal the bar cannot be seen and the counter that
         would have been in it is prefixed to the line instead — a redirected
         run still reads as progress rather than as an undated list.
+
+        That non-terminal line is a contract, not just formatting: see
+        `PROGRESS_RE` above, and `parse_progress`, which the web app uses to
+        follow a run. Change the shape of it and change them together.
         """
         now = time.monotonic()
         self._per_item.append(now - self._item_start)

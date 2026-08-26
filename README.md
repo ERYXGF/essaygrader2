@@ -242,6 +242,15 @@ choice above, as buttons), watch it run, and download the finished report. It sh
 the command line above. See `deploy/README.md` for running it locally (`venv/bin/uvicorn
 web.app:app --port 8002`) or hosting it permanently via launchd + Tailscale Funnel.
 
+The browser's progress bar is fed by reading that subprocess's stdout. A pipe is never a
+terminal, so the pipeline prints the plain per-essay lines described under *While it runs*
+rather than drawing a bar, and `web/jobs.py` parses them with **`progress.parse_progress` —
+the parser that lives next to the code that prints the line**. That is deliberate: when the
+web layer kept its own private regex, changing the per-essay line silently froze the
+browser's bar at 0% for a whole run without raising a single error. If you change what
+`Bar.advance()` prints, change `PROGRESS_RE` with it; `tests/test_jobs.py` drives the real
+grading loop and parses its real output, so it will tell you if you forget.
+
 ---
 
 ## Campaigns (financial years)
