@@ -41,13 +41,16 @@ async def replace_essays(files: Iterable[UploadFile]) -> dict:
     tmp_dir.mkdir()
 
     saved: List[str] = []
+    sources: dict[str, List[str]] = {}
     try:
         for upload in files:
-            name = Path(upload.filename or "").name
+            original = upload.filename or ""
+            name = Path(original).name
             if not name or name.startswith("."):
                 continue
             (tmp_dir / name).write_bytes(await upload.read())
             saved.append(name)
+            sources.setdefault(name, []).append(original)
 
         if not saved:
             raise ValueError("No files in the upload")
@@ -62,7 +65,19 @@ async def replace_essays(files: Iterable[UploadFile]) -> dict:
             shutil.rmtree(tmp_dir)
         raise
 
-    return {"replaced": True, "count": len(saved), "filenames": sorted(saved)}
+    # Two uploads can flatten to the same basename (e.g. same filename in
+    # different subfolders) — later ones silently overwrite earlier ones on
+    # disk. Surface that instead of letting the count quietly shrink.
+    collisions = {name: paths for name, paths in sources.items() if len(paths) > 1}
+
+    result = {
+        "replaced": True,
+        "count": len(set(saved)),
+        "filenames": sorted(set(saved)),
+    }
+    if collisions:
+        result["collisions"] = collisions
+    return result
 
 
 async def replace_recruitment_csv(file: UploadFile) -> dict:

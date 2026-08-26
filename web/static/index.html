@@ -274,6 +274,16 @@
     try {
       const result = await api("/api/upload/essays", { method: "POST", body: form });
       statusEl.textContent = "✓ Replaced input/essays/ — " + result.count + " file(s)";
+      if (result.collisions && Object.keys(result.collisions).length) {
+        const names = Object.keys(result.collisions);
+        let warn = "⚠ " + names.length + " filename collision(s) — only the last file was kept:";
+        warn += "<ul>";
+        for (const name of names) {
+          warn += "<li>" + name + " (from " + result.collisions[name].join(", ") + ")</li>";
+        }
+        warn += "</ul>";
+        statusEl.innerHTML += "<div class=\"warn-list\">" + warn + "</div>";
+      }
     } catch (e) {
       statusEl.classList.add("error");
       statusEl.textContent = "✗ " + e.message;
