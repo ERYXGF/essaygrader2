@@ -9,7 +9,9 @@ from typing import Callable, List, Dict, Optional
 import httpx
 from dotenv import load_dotenv
 import anthropic
- 
+
+import progress
+
  
 # ============================================================
 # CONFIG
@@ -188,52 +190,59 @@ def grade_essays(
     grading_prompt = _load_grading_prompt()
  
     results: List[Dict] = []
-    total = len(essays)
- 
-    for idx, essay in enumerate(essays, start=1):
-        candidate_number = essay["candidate_number"]
-        role = essay["role"]
-        essay_text = essay["essay_text"]
 
-        # Only genuinely unreadable submissions skip Claude. A Word or Pages
-        # file holds real answers, so it is graded like any other and merely
-        # flagged in the report's File Format column.
-        if not (essay_text or "").strip():
-            source = essay.get("source_file", "")
-            print(
-                f"  → Skipping {idx}/{total} (candidate {candidate_number}): "
-                f"'{source}' could not be read"
+    with progress.Bar(len(essays)) as bar:
+        for essay in essays:
+            candidate_number = essay["candidate_number"]
+            role = essay["role"]
+            essay_text = essay["essay_text"]
+            label = f"{candidate_number} {role}"
+
+            # Only genuinely unreadable submissions skip Claude. A Word or Pages
+            # file holds real answers, so it is graded like any other and merely
+            # flagged in the report's File Format column.
+            if not (essay_text or "").strip():
+                source = essay.get("source_file", "")
+                reason = essay.get("format_reason") or f"'{source}' could not be read."
+                result = _error_result(
+                    candidate_number,
+                    role,
+                    f"{reason} Not graded - the candidate must resubmit as a PDF.",
+                )
+                result["source_file"] = source
+                result["format_label"] = essay.get("format_label", "")
+                results.append(result)
+                if on_result is not None:
+                    on_result(essay, result)
+                bar.advance(f"! {label:<12} skipped — '{source}' could not be read")
+                continue
+
+            # Naming the essay in flight is what distinguishes a slow call from
+            # a hung one while the counts sit still.
+            bar.set_current(label)
+            started = time.monotonic()
+
+            result = grade_essay(
+                essay_text=essay_text,
+                candidate_number=candidate_number,
+                role=role,
+                client=client,
+                grading_prompt=grading_prompt,
+                model=model,
             )
-            reason = essay.get("format_reason") or f"'{source}' could not be read."
-            result = _error_result(
-                candidate_number,
-                role,
-                f"{reason} Not graded - the candidate must resubmit as a PDF.",
-            )
-            result["source_file"] = source
+
+            result["source_file"] = essay.get("source_file", "")
             result["format_label"] = essay.get("format_label", "")
             results.append(result)
             if on_result is not None:
                 on_result(essay, result)
-            continue
 
-        print(f"  → Grading {idx}/{total} (candidate {candidate_number}, role {role})")
- 
-        result = grade_essay(
-            essay_text=essay_text,
-            candidate_number=candidate_number,
-            role=role,
-            client=client,
-            grading_prompt=grading_prompt,
-            model=model,
-        )
- 
-        result["source_file"] = essay.get("source_file", "")
-        result["format_label"] = essay.get("format_label", "")
-        results.append(result)
-        if on_result is not None:
-            on_result(essay, result)
- 
+            # Reported after the call, not before, so the line carries what was
+            # actually learned rather than only what was about to be attempted.
+            elapsed = int(round(time.monotonic() - started))
+            outcome = result.get("classification") or "no classification"
+            bar.advance(f"✓ {label:<12} {outcome:<36} {elapsed:>4}s")
+
     return results
  
  
@@ -271,7 +280,7 @@ def _stream_with_retry(
         except RETRYABLE_EXCEPTIONS as exc:
             if attempt < max_retries:
                 wait = 2 ** attempt  # 2s, 4s, 8s, 16s
-                print(
+                progress.log(
                     f"     ! {type(exc).__name__} (attempt {attempt}/{max_retries}); "
                     f"retrying in {wait}s..."
                 )
@@ -309,7 +318,7 @@ def _json_with_corrective_retries(
             return json.loads(_extract_first_json_object(raw_output))
         except (ValueError, json.JSONDecodeError) as exc:
             if parse_attempt < PARSE_FIX_ATTEMPTS:
-                print(
+                progress.log(
                     f"     ! Invalid JSON in {context_label} ({exc}); "
                     f"asking Claude to correct it..."
                 )
@@ -327,7 +336,7 @@ def _json_with_corrective_retries(
                         ),
                     },
                 ]
-    print(
+    progress.log(
         f"     ! Could not obtain valid JSON for {context_label} after "
         f"{1 + PARSE_FIX_ATTEMPTS} attempts."
     )

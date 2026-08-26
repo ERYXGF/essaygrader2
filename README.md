@@ -85,6 +85,7 @@ essaygrader2/
 │   ├── recruitment_list.py        # reads the List export: dates, FY, decisions
 │   ├── embargo.py                 # the six-month re-application rule
 │   ├── report_writer.py           # Excel report generation
+│   ├── progress.py                # the progress bar for the long Claude loops
 │   └── main.py                    # five-step orchestrator
 │
 ├── tests/                         # unit tests, no API calls
@@ -191,6 +192,30 @@ handful of new submissions to an already-graded corpus costs only those few.
 `[o]` appears only when there is a mix; if everything is new there is nothing to
 narrow to. Cancelling stops the run without writing a report. A non-interactive
 run (no terminal) proceeds without asking, as does `--yes`.
+
+### While it runs
+
+A full regrade of 154 essays takes hours, so grading shows a progress bar with
+an estimate. Finished essays scroll past above it, one line each, and the bar
+names the candidate currently with Claude — so a slow call looks different from
+a hung one:
+
+```
+📤 Sending essays to Claude...
+  ✓ 860775 TRI   Priority Interview                     18s
+  ✓ 850237 TRI   Maybe                                  24s
+     ! ConnectionError (attempt 1/4); retrying in 2s...
+  ✓ 870509 LTC   Do Not Interview                       41s
+  [███████████░░░░░░░░░░░░░░░░░░░]  47/154 ·  31% · 14m elapsed · ~30m left · 861204 TFO
+```
+
+The estimate is the mean essay so far, and is hidden until three have finished —
+a projection off one essay is a guess wearing a number's clothes. The plagiarism
+screen gets the same bar over its Claude verdicts.
+
+**Redirecting to a file turns the bar off.** `python src\main.py > run.log`
+writes one plain line per essay with no control characters, so the log stays
+readable. The same is true anywhere the output is not a terminal.
 
 ---
 
@@ -426,6 +451,8 @@ Each module has one job:
   applications; it never touches the cache.
 - **`report_writer.py`** — writes the four-sheet Excel report with
   classification/risk-based colour coding.
+- **`progress.py`** — the progress bar for the two long Claude loops. Presentation
+  only, and it draws nothing at all when the output is not a terminal.
 - **`main.py`** — orchestrates the five steps in order. No business logic
   lives here.
 
@@ -471,8 +498,11 @@ In `src/essay_grader.py`, top of file:
 - `DEFAULT_MODEL` — currently `claude-sonnet-5`. Changing it invalidates
   every cached grade, because the cache is keyed on the model as well as
   the rubric — run `--dry-run` first to see what a change would cost.
-- `MAX_TOKENS` — currently 4000. Bump to 6000 or 8000 if you start seeing
-  "Unterminated JSON object" errors (means the response was cut off).
+- `MAX_TOKENS` — currently 24000. On Sonnet 5 this covers adaptive thinking as
+  well as the answer, so it needs far more headroom than the ~5000 tokens a
+  verdict uses on its own. It is a ceiling, not a reservation — unused tokens
+  cost nothing. Bump it if you start seeing "Unterminated JSON object" errors,
+  which mean the response was cut off.
 - `MAX_RETRIES` — currently 4. Total backoff is 2+4+8+16 = 30 seconds
   before giving up.
 

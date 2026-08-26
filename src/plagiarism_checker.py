@@ -24,6 +24,7 @@ from typing import Dict, List, Optional, Tuple
 
 import anthropic
 
+import progress
 from essay_grader import (
     DEFAULT_MODEL,
     PARSE_FIX_ATTEMPTS,
@@ -126,31 +127,40 @@ def check_plagiarism(
     review_prompt = _load_pair_review_prompt()
 
     pair_results: List[Dict] = []
-    for essay_a, essay_b, lexical, semantic in flagged:
-        essay_a, essay_b = _canonical_pair(essay_a, essay_b)
-        # ASCII-only: Windows consoles running cp1252 choke on arrow glyphs.
-        print(
-            f"  -> Reviewing pair {essay_a['candidate_number']} <-> "
-            f"{essay_b['candidate_number']} "
-            f"(lexical {lexical:.0%}, semantic {semantic:.0%})"
-        )
-        verdict = _claude_pair_verdict(
-            client=client,
-            model=model,
-            system=review_prompt,
-            essay_a=essay_a,
-            essay_b=essay_b,
-        )
-        pair_results.append({
-            "candidate_a": essay_a["candidate_number"],
-            "candidate_b": essay_b["candidate_number"],
-            "lexical_pct": round(lexical * 100, 1),
-            "semantic_pct": round(semantic * 100, 1),
-            "risk": _risk_band(verdict["verdict"], lexical),
-            "claude_verdict": verdict["verdict"],
-            "claude_explanation": verdict["explanation"],
-            "shared_evidence": verdict["shared_evidence"],
-        })
+    # Only the Claude verdicts get a bar. The pairwise screen above is pure
+    # Python and finishes before it could be drawn.
+    with progress.Bar(len(flagged)) as bar:
+        for essay_a, essay_b, lexical, semantic in flagged:
+            essay_a, essay_b = _canonical_pair(essay_a, essay_b)
+            pair_label = (
+                f"{essay_a['candidate_number']} <-> {essay_b['candidate_number']}"
+            )
+            # ASCII-only: Windows consoles running cp1252 choke on arrow glyphs.
+            # Announced before the call, and spelled exactly as it always was,
+            # so a redirected run's log is unchanged by the bar.
+            progress.log(
+                f"  -> Reviewing pair {pair_label} "
+                f"(lexical {lexical:.0%}, semantic {semantic:.0%})"
+            )
+            bar.set_current(pair_label)
+            verdict = _claude_pair_verdict(
+                client=client,
+                model=model,
+                system=review_prompt,
+                essay_a=essay_a,
+                essay_b=essay_b,
+            )
+            pair_results.append({
+                "candidate_a": essay_a["candidate_number"],
+                "candidate_b": essay_b["candidate_number"],
+                "lexical_pct": round(lexical * 100, 1),
+                "semantic_pct": round(semantic * 100, 1),
+                "risk": _risk_band(verdict["verdict"], lexical),
+                "claude_verdict": verdict["verdict"],
+                "claude_explanation": verdict["explanation"],
+                "shared_evidence": verdict["shared_evidence"],
+            })
+            bar.advance()
 
     return pair_results
 
@@ -347,7 +357,7 @@ def _claude_pair_verdict(
     if verdict is None:
         # Flag for a human instead of killing the pipeline; the
         # lexical/semantic scores are still reported.
-        print(f"     ! Flagging pair {pair_label} for manual review.")
+        progress.log(f"     ! Flagging pair {pair_label} for manual review.")
         return {
             "verdict": "suspicious",
             "explanation": (
