@@ -48,8 +48,13 @@ def _row(created, staff, role="TRI", decision="", approval=""):
     return f"{created},someone,a@b.com,{staff},A Name,LGW,{role},{decision},{approval}"
 
 
-def _app(staff, date, role="TRI", decision="", approval="", year=""):
-    return rl.Application(staff, date, role, decision, approval, year)
+def _app(
+    staff, date, role="TRI", decision="", approval="", year="",
+    idp_decision="", idp_approval="",
+):
+    return rl.Application(
+        staff, date, role, decision, approval, year, idp_decision, idp_approval
+    )
 
 
 # The OData export straight from SharePoint: internal header names with
@@ -153,6 +158,22 @@ class TestLoadApplications(unittest.TestCase):
         self.assertEqual(apps[0].final_approval, "PENDING")
         self.assertEqual(apps[0].interview_decision, "NO")  # from DECISION
 
+    def test_reads_the_idp_fields_including_the_odata_emoji_shaped_column(self):
+        """IDPSIMDECISION matches like any other column. Final IDP Approval's
+        real internal name in a live export is OData-emoji-prefixed
+        ('OData__x0001f534_FINALIDPAPPROVAL_x000') because the List column's
+        own display name was created with a 🔴 in it — locate_containing()
+        exists for exactly this shape, since it isn't a prefix match."""
+        headers = ODATA_HEADERS + ",IDPSIMDECISION,OData__x0001f534_FINALIDPAPPROVAL_x000"
+        row = (
+            _odata_row("2026-06-04T13:26:07Z", "1", "LTC")
+            + "," + _choice("NO") + "," + _choice("REJECTED")
+        )
+        path = _csv([row], headers=headers)
+        apps = rl.load_applications(path)
+        self.assertEqual(apps[0].idp_sim_decision, "NO")
+        self.assertEqual(apps[0].final_idp_approval, "REJECTED")
+
     def test_a_companion_id_column_does_not_shadow_its_real_column(self):
         """'Position applied for#Id' shares a prefix with the column we want."""
         path = _csv(
@@ -205,7 +226,7 @@ class TestSubtractMonths(unittest.TestCase):
 class TestFindEmbargoes(unittest.TestCase):
     def test_reapplying_inside_the_window_is_flagged(self):
         apps = [
-            _app("100", _date("2026-07-28"), "TRI"),   # FY26
+            _app("100", _date("2026-07-28"), "TRI", decision="NO"),  # FY26
             _app("100", _date("2026-10-15"), "LTC"),   # FY27, 79 days later
         ]
         found = eb.find_embargoes(apps, "FY27")
@@ -215,7 +236,7 @@ class TestFindEmbargoes(unittest.TestCase):
 
     def test_reapplying_outside_the_window_is_clear(self):
         apps = [
-            _app("100", _date("2026-02-05")),          # FY26
+            _app("100", _date("2026-02-05"), decision="NO"),  # FY26
             _app("100", _date("2026-10-15")),          # FY27, 252 days later
         ]
         self.assertEqual(eb.find_embargoes(apps, "FY27"), {})
@@ -223,44 +244,83 @@ class TestFindEmbargoes(unittest.TestCase):
     def test_a_different_role_still_counts(self):
         """The embargo attaches to the person, not the post."""
         apps = [
-            _app("100", _date("2026-07-28"), "TRI"),
+            _app("100", _date("2026-07-28"), "TRI", decision="NO"),
             _app("100", _date("2026-10-01"), "TFO"),
         ]
         self.assertIn("100", eb.find_embargoes(apps, "FY27"))
 
-    def test_two_roles_in_the_same_campaign_do_not_flag_each_other(self):
-        """The six real double applicants submit 0-4 days apart. Flagging them
-        would make the column useless noise."""
+    def test_a_successful_or_pending_prior_never_triggers(self):
+        """Only a rejection counts — this is the real change from the old
+        "every prior applicant counts" rule."""
+        apps = [
+            _app("100", _date("2026-07-28"), "TRI", decision="YES", approval="APPROVED"),
+            _app("200", _date("2026-07-28"), "TRI", decision="PENDING"),
+            _app("100", _date("2026-10-01"), "LTC"),
+            _app("200", _date("2026-10-01"), "LTC"),
+        ]
+        self.assertEqual(eb.find_embargoes(apps, "FY27"), {})
+
+    def test_each_of_the_four_decision_fields_can_trigger_alone(self):
+        cases = dict(decision="NO"), dict(approval="REJECTED"), \
+            dict(idp_decision="NO"), dict(idp_approval="REJECTED")
+        for kwargs in cases:
+            apps = [
+                _app("100", _date("2026-07-28"), "TRI", **kwargs),
+                _app("100", _date("2026-10-01"), "LTC"),
+            ]
+            self.assertIn("100", eb.find_embargoes(apps, "FY27"), kwargs)
+
+    def test_two_roles_in_the_same_campaign_do_not_flag_each_other_when_not_rejected(self):
+        """The six real double applicants submit 0-4 days apart. Flagging every
+        one of them regardless of outcome would make the column useless
+        noise — that's still true for a prior that wasn't rejected."""
         apps = [
             _app("872524", _date("2026-07-25"), "TRI"),
             _app("872524", _date("2026-07-28"), "TFO TRI"),
         ]
         self.assertEqual(eb.find_embargoes(apps, "FY26"), {})
 
+    def test_two_roles_in_the_same_campaign_do_flag_when_the_first_was_rejected(self):
+        """Real case: 860775 has three FY26 rows (4 Jun, 15 Jul, 16 Jul); the
+        4 Jun LTC application was rejected, and the 15 Jul one followed 41
+        days later. Same campaign no longer exempts this — see the module
+        docstring on how this overlaps with, but differs from, Double
+        Application."""
+        apps = [
+            _app("860775", _date("2026-06-04"), "LTC", decision="NO", approval="REJECTED"),
+            _app("860775", _date("2026-07-15"), "LTC"),
+        ]
+        found = eb.find_embargoes(apps, "FY26")
+        self.assertIn("860775", found)
+        self.assertEqual(found["860775"].days_apart, 41)
+
     def test_the_window_boundary_is_inclusive(self):
         apps = [
-            _app("100", _date("2026-04-15")),
+            _app("100", _date("2026-04-15"), decision="NO"),
             _app("100", _date("2026-10-15")),  # exactly six months
         ]
         self.assertIn("100", eb.find_embargoes(apps, "FY27"))
 
     def test_one_day_beyond_the_window_is_clear(self):
         apps = [
-            _app("100", _date("2026-04-14")),
+            _app("100", _date("2026-04-14"), decision="NO"),
             _app("100", _date("2026-10-15")),
         ]
         self.assertEqual(eb.find_embargoes(apps, "FY27"), {})
 
     def test_the_shortest_gap_is_the_one_reported(self):
         apps = [
-            _app("100", _date("2026-05-20")),
-            _app("100", _date("2026-07-28")),
+            _app("100", _date("2026-05-20"), decision="NO"),
+            _app("100", _date("2026-07-28"), decision="NO"),
             _app("100", _date("2026-10-15")),
         ]
         self.assertEqual(eb.find_embargoes(apps, "FY27")["100"].days_apart, 79)
 
     def test_candidates_not_in_this_campaign_are_ignored(self):
-        apps = [_app("100", _date("2026-07-28")), _app("200", _date("2026-02-05"))]
+        apps = [
+            _app("100", _date("2026-07-28"), decision="NO"),
+            _app("200", _date("2026-02-05"), decision="NO"),
+        ]
         self.assertEqual(eb.find_embargoes(apps, "FY27"), {})
 
     def test_a_first_time_applicant_is_clear(self):
@@ -269,10 +329,13 @@ class TestFindEmbargoes(unittest.TestCase):
         )
 
     def test_a_later_campaign_cannot_trigger_an_embargo(self):
-        """Only history counts. A future application is not a prior one."""
+        """Only history counts. A future application is not a prior one —
+        even a rejected one. The later row here is rejected and the earlier
+        one isn't, so the only way this comes back {} is if the later row
+        is correctly refused as a "prior" for the earlier one."""
         apps = [
-            _app("100", _date("2026-10-15")),  # FY27
-            _app("100", _date("2026-11-20")),  # FY27 as well
+            _app("100", _date("2026-10-15")),                 # FY27
+            _app("100", _date("2026-11-20"), decision="NO"),  # FY27, later, rejected
         ]
         self.assertEqual(eb.find_embargoes(apps, "FY27"), {})
 
@@ -280,7 +343,7 @@ class TestFindEmbargoes(unittest.TestCase):
         """30 Sep is FY26, 1 Oct is FY27 — one day apart, still a
         re-application, and well inside the window."""
         apps = [
-            _app("100", _date("2026-09-30")),
+            _app("100", _date("2026-09-30"), decision="NO"),
             _app("100", _date("2026-10-01")),
         ]
         found = eb.find_embargoes(apps, "FY27")
@@ -323,7 +386,7 @@ class TestFinancialYear(unittest.TestCase):
         """Read by date, the September row would be FY26 and could never be
         flagged against the July FY26 one."""
         apps = [
-            rl.Application("100", _date("2026-07-28"), "TRI", "", "", "FY26"),
+            rl.Application("100", _date("2026-07-28"), "TRI", "NO", "", "FY26"),
             rl.Application("100", _date("2026-09-20"), "LTC", "", "", "FY27"),
         ]
         found = eb.find_embargoes(apps, "FY27")
@@ -503,13 +566,27 @@ class TestSubmittedDates(unittest.TestCase):
 class TestDescribe(unittest.TestCase):
     def test_names_the_campaign_gap_and_role(self):
         found = eb.find_embargoes([
-            _app("100", _date("2026-07-28"), "LTC"),
+            _app("100", _date("2026-07-28"), "LTC", decision="NO"),
             _app("100", _date("2026-10-15"), "TRI"),
         ], "FY27")
         text = eb.describe(found["100"])
         self.assertTrue(text.startswith("⚠"))
         for expected in ("79d", "FY26", "28 Jul 2026", "LTC"):
             self.assertIn(expected, text)
+
+    def test_idp_fields_are_shown_only_when_recorded(self):
+        found = eb.find_embargoes([
+            _app("100", _date("2026-07-28"), "LTC", decision="NO"),
+            _app("100", _date("2026-10-15"), "TRI"),
+        ], "FY27")
+        self.assertNotIn("IDP", eb.describe(found["100"]))
+
+        found = eb.find_embargoes([
+            _app("200", _date("2026-07-28"), "LTC", idp_decision="NO"),
+            _app("200", _date("2026-10-15"), "TRI"),
+        ], "FY27")
+        text = eb.describe(found["200"])
+        self.assertIn("IDP sim: NO", text)
 
 
 if __name__ == "__main__":

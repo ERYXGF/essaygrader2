@@ -5,13 +5,16 @@ It is a CSV export of a Microsoft List, backed up nightly, and it holds one row
 per application **across all campaigns** — which is what makes the re-application
 embargo computable at all.
 
-Four columns are read: **`Created`** (the submission date), **`FINANCIALYEAR`**
+Six columns are read: **`Created`** (the submission date), **`FINANCIALYEAR`**
 (the campaign the application belongs to, declared rather than inferred), and
-the **interview decision** and **final approval**, which the History sheet shows
-so a returning candidate's previous outcome sits beside their current one. The
-two decisions are reported verbatim and never interpreted — the live export
-carries PENDING and HOLD as well as YES/NO, so nothing may treat a non-YES as a
-NO. `role` rides along for reporting; everything else is ignored.
+two outcome pairs — **interview decision** / **final approval**, and the IDP
+stage's own **IDP sim decision** / **final IDP approval** — which the History
+sheet shows so a returning candidate's previous outcome sits beside their
+current one, and which the embargo (`embargo.py`) uses to decide whether a
+prior application was actually rejected. All four are reported verbatim and
+never interpreted — the live export carries PENDING and HOLD as well as
+YES/NO, so nothing may treat a non-YES as a NO. `role` rides along for
+reporting; everything else is ignored.
 
 The file is opened read-only and never written to — every output of this
 pipeline goes to the Excel workbook.
@@ -135,6 +138,12 @@ class Application(NamedTuple):
     interview_decision: str  # YES / NO / PENDING / HOLD / ''
     final_approval: str  # APPROVED / REJECTED / PENDING / ''
     financial_year: str = ""  # declared campaign, normalised: '2026' -> 'FY26'
+    # The IDP (simulator) stage's own decision/approval pair, reported
+    # verbatim like the two above. Appended after financial_year, not
+    # inserted earlier, so every existing positional Application(...) call
+    # site stays valid.
+    idp_sim_decision: str = ""  # YES / NO / PENDING / HOLD / ''
+    final_idp_approval: str = ""  # APPROVED / REJECTED / PENDING / ''
 
 
 def _decode_sharepoint(name: str) -> str:
@@ -186,11 +195,20 @@ _STAFF_NUMBER = "staffnumber"
 _ROLE = "positionappliedfor"
 _FINANCIAL_YEAR = "financialyear"
 _FINAL_APPROVAL = "finalapproval"
+_IDP_SIM_DECISION = "idpsimdecision"
 
 # The friendly export labels this "🔴 INTERVIEW DECISION 🔴"; the OData one
 # calls it plain DECISION. Exact matching resolves DECISION ahead of its
 # DECISION#Id companion, and IDPSIMDECISION shares no prefix with either.
 _INTERVIEW_DECISION = ("interviewdecision", "decision")
+
+# Unlike the columns above, this one's OData internal name is not a plain
+# prefix match: the List column was itself created with a 🔴 in its display
+# name, so SharePoint's auto-generated internal name carries the escaped
+# emoji and a truncated tail — 'OData__x0001f534_FINALIDPAPPROVAL_x000' —
+# which normalises to 'odatafinalidpapprovalx000'. locate()'s prefix search
+# cannot find "finalidpapproval" inside that; see locate_containing() below.
+_FINAL_IDP_APPROVAL = "finalidpapproval"
 
 # Readable names for the error message, since the lookup keys are squashed.
 _COLUMN_LABELS = {_CREATED: "Created", _STAFF_NUMBER: "Staff Number"}
@@ -292,6 +310,23 @@ def load_report(path: Optional[Path] = None):
         for position, header in enumerate(headers):
             index.setdefault(_normalise_header(header).replace(" ", ""), position)
 
+        def _best_match(candidates: List[str]) -> Optional[int]:
+            # The OData export pairs each choice column with companions
+            # ('...#Id', '...#Claims'), which share its prefix (or contain
+            # the key, for locate_containing) and would otherwise make every
+            # match ambiguous. Drop them first.
+            real = [h for h in candidates if not h.endswith(("id", "claims", "odatatype"))]
+            candidates = real or candidates
+            if not candidates:
+                return None
+            # Shortest wins: the plain column is always a prefix of its
+            # decorated siblings. Still refuse a genuine tie between two
+            # different columns of equal length.
+            candidates.sort(key=len)
+            if len(candidates) > 1 and len(candidates[0]) == len(candidates[1]):
+                return None
+            return index[candidates[0]]
+
         def locate(key: str) -> Optional[int]:
             """Column position for a key: exact match, else a unique prefix.
 
@@ -303,25 +338,26 @@ def load_report(path: Optional[Path] = None):
             """
             if key in index:
                 return index[key]
-            matches = [h for h in index if h.startswith(key)]
-            # The OData export pairs each choice column with companions
-            # ('...#Id', '...#Claims'), which share its prefix and would
-            # otherwise make every prefix ambiguous. Drop them first.
-            real = [h for h in matches if not h.endswith(("id", "claims", "odatatype"))]
-            candidates = real or matches
-            if not candidates:
-                return None
-            # Shortest wins: the plain column is always a prefix of its
-            # decorated siblings. Still refuse a genuine tie between two
-            # different columns of equal length.
-            candidates.sort(key=len)
-            if len(candidates) > 1 and len(candidates[0]) == len(candidates[1]):
-                return None
-            return index[candidates[0]]
+            return _best_match([h for h in index if h.startswith(key)])
+
+        def locate_containing(key: str) -> Optional[int]:
+            """Column position for a key appearing anywhere in the header.
+
+            Only needed for a List column whose *display* name itself was
+            created with an emoji in it — SharePoint's auto-generated
+            internal name then wraps ours ('OData__x0001f534_FINALIDPAPPROVAL_x000')
+            instead of starting with it, so locate()'s prefix search can't
+            find it. Same disambiguation as locate(): companions are dropped
+            first, and a genuine tie refuses to guess.
+            """
+            return _best_match([h for h in index if key in h])
 
         positions = {key: locate(key) for key in
                      (_CREATED, _STAFF_NUMBER, _ROLE, _FINANCIAL_YEAR,
-                      _FINAL_APPROVAL)}
+                      _FINAL_APPROVAL, _IDP_SIM_DECISION)}
+        positions[_FINAL_IDP_APPROVAL] = (
+            locate(_FINAL_IDP_APPROVAL) or locate_containing(_FINAL_IDP_APPROVAL)
+        )
         missing = [c for c in REQUIRED_COLUMNS if positions.get(c) is None]
         if missing:
             raise ValueError(
@@ -359,6 +395,8 @@ def load_report(path: Optional[Path] = None):
                     financial_year=parse_financial_year(
                         field(row, positions[_FINANCIAL_YEAR])
                     ),
+                    idp_sim_decision=field(row, positions[_IDP_SIM_DECISION]).upper(),
+                    final_idp_approval=field(row, positions[_FINAL_IDP_APPROVAL]).upper(),
                 )
             )
 

@@ -357,12 +357,17 @@ class TestEmbargoWiring(unittest.TestCase):
         ]
 
     def _list(self, rows):
+        """rows are (created, staff, role) or (created, staff, role, decision)
+        — decision defaults to '' when omitted, matching a candidate whose
+        interview decision isn't recorded."""
         handle = tempfile.NamedTemporaryFile(
             "w", suffix=".csv", delete=False, encoding="utf-8-sig", newline=""
         )
-        handle.write("Created,Staff Number,Position applied for,OUTCOME\n")
-        for created, staff, role in rows:
-            handle.write(f"{created},{staff},{role},\n")
+        handle.write("Created,Staff Number,Position applied for,DECISION\n")
+        for row in rows:
+            created, staff, role = row[:3]
+            decision = row[3] if len(row) > 3 else ""
+            handle.write(f"{created},{staff},{role},{decision}\n")
         handle.close()
         return handle.name
 
@@ -380,9 +385,9 @@ class TestEmbargoWiring(unittest.TestCase):
 
     def test_flags_a_reapplicant_and_clears_the_others(self):
         path = self._list([
-            ("25/07/2026 09:12", "872524", "TRI"),   # FY26
-            ("12/10/2026 08:30", "872524", "LTC"),   # FY27, 79 days later
-            ("15/11/2026 09:00", "860775", "TRI"),   # FY27 only
+            ("25/07/2026 09:12", "872524", "TRI", "NO"),  # FY26, rejected
+            ("12/10/2026 08:30", "872524", "LTC"),        # FY27, 79 days later
+            ("15/11/2026 09:00", "860775", "TRI"),        # FY27 only
         ])
         results = self._results()
         with redirect_stdout(io.StringIO()):
