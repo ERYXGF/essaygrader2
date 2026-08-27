@@ -322,6 +322,33 @@ class TestSummarySheet(unittest.TestCase):
         # A real date, not text: Excel must sort it chronologically.
         self.assertEqual(rows[0][headers.index("Submitted")], dt.datetime(2026, 7, 28))
 
+    def test_job_number_is_written_plain_when_matched(self):
+        row = _result("860775", "LTC", [])
+        row["job_number"] = "17073"
+        row["match_status"] = "MATCHED"
+        headers, rows, fills = self._summary([row])
+        self.assertEqual(rows[0][headers.index("Job Number")], "17073")
+        self.assertEqual(rows[0][headers.index("Match Status")], "MATCHED")
+        self.assertNotEqual(
+            fills["Job Number"][0].start_color.rgb, "00FFEB9C"
+        )
+        self.assertNotEqual(
+            fills["Match Status"][0].start_color.rgb, "00FFEB9C"
+        )
+
+    def test_job_number_and_match_status_are_shaded_when_unmatched(self):
+        row = _result("860775", "LTC", [])
+        row["job_number"] = ""
+        row["match_status"] = "NO JOB NUMBER IN FILENAME AND FY AMBIGUOUS"
+        headers, rows, fills = self._summary([row])
+        self.assertIn(rows[0][headers.index("Job Number")], ("", None))
+        self.assertEqual(
+            rows[0][headers.index("Match Status")],
+            "NO JOB NUMBER IN FILENAME AND FY AMBIGUOUS",
+        )
+        self.assertEqual(fills["Job Number"][0].start_color.rgb, "00FFEB9C")
+        self.assertEqual(fills["Match Status"][0].start_color.rgb, "00FFEB9C")
+
     def test_a_row_with_no_date_leaves_submitted_blank(self):
         """No recruitment list, or a candidate absent from it. Never a guess."""
         headers, rows, _ = self._summary([_result("1", "TRI", [])])

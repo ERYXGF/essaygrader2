@@ -424,6 +424,144 @@ class TestEmbargoWiring(unittest.TestCase):
         self.assertEqual(len(results), 2)
 
 
+class TestJobNumberWiring(unittest.TestCase):
+    """_apply_job_numbers resolves Job Number + Match Status for every row.
+
+    A job number already on the result (parsed from a new-style filename)
+    is cross-checked against the List, not trusted blindly. Every scenario
+    ends in a result row that still carries its grading data — the join
+    never drops a row, only leaves Job Number blank with a Match Status
+    naming why.
+    """
+
+    def _list(self, rows):
+        """rows are (created, staff, role, job_number)."""
+        handle = tempfile.NamedTemporaryFile(
+            "w", suffix=".csv", delete=False, encoding="utf-8-sig", newline=""
+        )
+        handle.write("Created,Staff Number,Position applied for,JOB NUMBER applied for\n")
+        for created, staff, role, job_number in rows:
+            handle.write(f"{created},{staff},{role},{job_number}\n")
+        handle.close()
+        return handle.name
+
+    def _result(self, number="860775", role="LTC", job_number="", source_file=None):
+        return {
+            "candidate_number": number,
+            "Role": role,
+            "job_number": job_number,
+            "source_file": source_file or f"{number}_{role}_assignment.pdf",
+        }
+
+    def test_one_matching_row_resolves_cleanly(self):
+        path = self._list([("04/06/2026 09:00", "860775", "LTC", "1")])
+        results = [self._result()]
+        main._apply_job_numbers(results, "FY26", main._load_applications(path))
+        self.assertEqual(results[0]["job_number"], "1")
+        self.assertEqual(results[0]["match_status"], main.MATCH_STATUS_MATCHED)
+
+    def test_a_job_number_already_on_the_result_is_verified_and_kept(self):
+        """Parsed straight from a new-style filename — cross-checked, not
+        blindly trusted, but kept when the List agrees."""
+        path = self._list([("04/06/2026 09:00", "860775", "LTC", "17073")])
+        results = [self._result(job_number="17073")]
+        main._apply_job_numbers(results, "FY26", main._load_applications(path))
+        self.assertEqual(results[0]["job_number"], "17073")
+        self.assertEqual(results[0]["match_status"], main.MATCH_STATUS_MATCHED)
+
+    def test_two_role_matching_rows_with_no_filename_job_number_are_fy_ambiguous(self):
+        """Same role applied for twice, one physical file with no job
+        number in its name — genuinely can't tell which attempt it is."""
+        path = self._list([
+            ("04/06/2026 09:00", "860775", "LTC", "1"),
+            ("15/07/2026 09:00", "860775", "LTC", "17073"),
+        ])
+        results = [self._result()]
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            main._apply_job_numbers(results, "FY26", main._load_applications(path))
+        self.assertEqual(results[0]["job_number"], "")
+        self.assertEqual(results[0]["match_status"], main.MATCH_FY_AMBIGUOUS)
+        self.assertIn("NO JOB NUMBER IN FILENAME AND FY AMBIGUOUS", buffer.getvalue())
+
+    def test_staff_number_absent_from_the_list_entirely(self):
+        path = self._list([("04/06/2026 09:00", "999999", "LTC", "1")])
+        results = [self._result(number="860775")]
+        main._apply_job_numbers(results, "FY26", main._load_applications(path))
+        self.assertEqual(results[0]["job_number"], "")
+        self.assertEqual(results[0]["match_status"], main.MATCH_STAFF_NOT_IN_LIST)
+
+    def test_no_list_available_reads_as_staff_not_in_list(self):
+        results = [self._result()]
+        main._apply_job_numbers(results, "FY26", None)
+        self.assertEqual(results[0]["job_number"], "")
+        self.assertEqual(results[0]["match_status"], main.MATCH_STAFF_NOT_IN_LIST)
+
+    def test_staff_in_list_but_not_for_this_role_with_no_filename_job_number(self):
+        """Candidate is on the List, just not for the role this filename
+        claims — no job number to cross-check against, so it's a role
+        mismatch, not a "not in list"."""
+        path = self._list([("04/06/2026 09:00", "860775", "TRI", "1")])
+        results = [self._result(role="LTC")]
+        main._apply_job_numbers(results, "FY26", main._load_applications(path))
+        self.assertEqual(results[0]["job_number"], "")
+        self.assertEqual(results[0]["match_status"], main.MATCH_ROLE_MISMATCH)
+
+    def test_filename_job_number_not_found_anywhere_for_this_staff(self):
+        path = self._list([("04/06/2026 09:00", "860775", "LTC", "1")])
+        results = [self._result(job_number="99999")]
+        main._apply_job_numbers(results, "FY26", main._load_applications(path))
+        self.assertEqual(results[0]["job_number"], "")
+        self.assertEqual(results[0]["match_status"], main.MATCH_NO_MATCHING_ROW)
+
+    def test_filename_job_number_found_under_a_different_role(self):
+        """The job number is real, but the List has it down for a
+        different role than the filename claims — a mistyped-role case."""
+        path = self._list([("04/06/2026 09:00", "860775", "TRI", "17073")])
+        results = [self._result(role="LTC", job_number="17073")]
+        main._apply_job_numbers(results, "FY26", main._load_applications(path))
+        self.assertEqual(results[0]["job_number"], "")
+        self.assertEqual(results[0]["match_status"], main.MATCH_ROLE_MISMATCH)
+
+    def test_filename_job_number_shared_by_two_list_rows(self):
+        """A CSV data problem — two rows claim the same job number for
+        this staff — rather than something to guess between."""
+        path = self._list([
+            ("04/06/2026 09:00", "860775", "LTC", "17073"),
+            ("15/07/2026 09:00", "860775", "TRI", "17073"),
+        ])
+        results = [self._result(job_number="17073")]
+        main._apply_job_numbers(results, "FY26", main._load_applications(path))
+        self.assertEqual(results[0]["job_number"], "")
+        self.assertEqual(results[0]["match_status"], main.MATCH_MULTIPLE_MATCHING_ROWS)
+
+    def test_unmatched_rows_are_never_dropped_from_results(self):
+        """The whole point: a failed join still leaves the row (and its
+        grading data) in the list that gets written to the report."""
+        results = [self._result(number="000000")]
+        results[0]["classification"] = "Priority Interview"
+        main._apply_job_numbers(results, "FY26", None)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["classification"], "Priority Interview")
+        self.assertEqual(results[0]["match_status"], main.MATCH_STAFF_NOT_IN_LIST)
+
+    def test_summary_reports_totals_and_unmatched_filenames(self):
+        path = self._list([("04/06/2026 09:00", "860775", "LTC", "1")])
+        results = [
+            self._result(number="860775", source_file="860775_LTC_assignment.pdf"),
+            self._result(
+                number="999999", role="TRI", source_file="999999_TRI_assignment.pdf"
+            ),
+        ]
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            main._apply_job_numbers(results, "FY26", main._load_applications(path))
+        output = buffer.getvalue()
+        self.assertIn("1 of 2 matched", output)
+        self.assertIn("STAFF NUMBER NOT IN LIST: 1", output)
+        self.assertIn("999999_TRI_assignment.pdf: STAFF NUMBER NOT IN LIST", output)
+
+
 class TestCampaignMembershipGuard(unittest.TestCase):
     """Stops a run grading another campaign's essays under this campaign's name.
 

@@ -5,7 +5,7 @@ It is a CSV export of a Microsoft List, backed up nightly, and it holds one row
 per application **across all campaigns** — which is what makes the re-application
 embargo computable at all.
 
-Six columns are read: **`Created`** (the submission date), **`FINANCIALYEAR`**
+Seven columns are read: **`Created`** (the submission date), **`FINANCIALYEAR`**
 (the campaign the application belongs to, declared rather than inferred), and
 two outcome pairs — **interview decision** / **final approval**, and the IDP
 stage's own **IDP sim decision** / **final IDP approval** — which the History
@@ -13,8 +13,11 @@ sheet shows so a returning candidate's previous outcome sits beside their
 current one, and which the embargo (`embargo.py`) uses to decide whether a
 prior application was actually rejected. All four are reported verbatim and
 never interpreted — the live export carries PENDING and HOLD as well as
-YES/NO, so nothing may treat a non-YES as a NO. `role` rides along for
-reporting; everything else is ignored.
+YES/NO, so nothing may treat a non-YES as a NO. **`JOB NUMBER applied for`**
+distinguishes two applications by the same person for the same role, used to
+back-fill the Job Number column for a written assignment whose own filename
+doesn't carry one (see `rows_for`, `main._apply_job_numbers`). `role` rides
+along for reporting; everything else is ignored.
 
 The file is opened read-only and never written to — every output of this
 pipeline goes to the Excel workbook.
@@ -144,6 +147,11 @@ class Application(NamedTuple):
     # site stays valid.
     idp_sim_decision: str = ""  # YES / NO / PENDING / HOLD / ''
     final_idp_approval: str = ""  # APPROVED / REJECTED / PENDING / ''
+    # The List's own per-application id — distinct even for two applications
+    # by the same person for the same role. Appended last for the same
+    # reason as the pair above: every existing positional call site stays
+    # valid.
+    job_number: str = ""
 
 
 def _decode_sharepoint(name: str) -> str:
@@ -196,6 +204,11 @@ _ROLE = "positionappliedfor"
 _FINANCIAL_YEAR = "financialyear"
 _FINAL_APPROVAL = "finalapproval"
 _IDP_SIM_DECISION = "idpsimdecision"
+# The real OData header truncates 'applied for' to 'applied_x' at
+# SharePoint's 32-character internal-name limit — a prefix match on this
+# still finds it, and also matches the friendly export's plain
+# 'JOB NUMBER APPLIED FOR'.
+_JOB_NUMBER = "jobnumberapplied"
 
 # The friendly export labels this "🔴 INTERVIEW DECISION 🔴"; the OData one
 # calls it plain DECISION. Exact matching resolves DECISION ahead of its
@@ -354,7 +367,7 @@ def load_report(path: Optional[Path] = None):
 
         positions = {key: locate(key) for key in
                      (_CREATED, _STAFF_NUMBER, _ROLE, _FINANCIAL_YEAR,
-                      _FINAL_APPROVAL, _IDP_SIM_DECISION)}
+                      _FINAL_APPROVAL, _IDP_SIM_DECISION, _JOB_NUMBER)}
         positions[_FINAL_IDP_APPROVAL] = (
             locate(_FINAL_IDP_APPROVAL) or locate_containing(_FINAL_IDP_APPROVAL)
         )
@@ -397,6 +410,7 @@ def load_report(path: Optional[Path] = None):
                     ),
                     idp_sim_decision=field(row, positions[_IDP_SIM_DECISION]).upper(),
                     final_idp_approval=field(row, positions[_FINAL_IDP_APPROVAL]).upper(),
+                    job_number=field(row, positions[_JOB_NUMBER]),
                 )
             )
 
@@ -500,3 +514,20 @@ def by_staff_number(applications: List[Application]) -> Dict[str, List[Applicati
     for application in applications:
         grouped.setdefault(application.staff_number, []).append(application)
     return grouped
+
+
+def rows_for(
+    applications: List[Application], staff_number: str, campaign: str
+) -> List[Application]:
+    """This candidate's List rows within one campaign.
+
+    Used to back-fill the Job Number column for an essay whose filename
+    doesn't carry one (see main._apply_job_numbers): a written assignment
+    on disk names only the candidate and role, so telling two applications
+    for the same role apart — when there even are two — has to come from
+    here.
+    """
+    return [
+        a for a in applications
+        if a.staff_number == staff_number and campaign_of_application(a) == campaign
+    ]

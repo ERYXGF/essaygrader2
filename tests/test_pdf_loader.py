@@ -11,6 +11,7 @@ No files are read. Run from the project root with:
 """
 
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -22,9 +23,9 @@ import pdf_loader
 class TestParseFilename(unittest.TestCase):
     def test_existing_roles_are_unaffected(self):
         for name, expected in [
-            ("12345_LTC_assignment.pdf", ("12345", "LTC")),
-            ("12345_TRI_assignment.pdf", ("12345", "TRI")),
-            ("12345_TFO_assignment.pdf", ("12345", "TFO")),
+            ("12345_LTC_assignment.pdf", ("12345", "LTC", "")),
+            ("12345_TRI_assignment.pdf", ("12345", "TRI", "")),
+            ("12345_TFO_assignment.pdf", ("12345", "TFO", "")),
         ]:
             with self.subTest(name=name):
                 self.assertEqual(pdf_loader._parse_filename(name), expected)
@@ -33,21 +34,21 @@ class TestParseFilename(unittest.TestCase):
         """The real-world naming: 872524_TFO TRI_assignment.pdf."""
         self.assertEqual(
             pdf_loader._parse_filename("872524_TFO TRI_assignment.pdf"),
-            ("872524", "TFO TRI"),
+            ("872524", "TFO TRI", ""),
         )
 
     def test_underscored_spelling_normalises_to_the_same_role(self):
         """A filename typo must not create a second, parallel role."""
         self.assertEqual(
             pdf_loader._parse_filename("872524_TFO_TRI_assignment.pdf"),
-            ("872524", "TFO TRI"),
+            ("872524", "TFO TRI", ""),
         )
 
     def test_non_pdf_extension_still_parses(self):
         """Wrong container is flagged later, not rejected here."""
         self.assertEqual(
             pdf_loader._parse_filename("999_TFO TRI_assignment.docx"),
-            ("999", "TFO TRI"),
+            ("999", "TFO TRI", ""),
         )
 
     def test_unrecognised_role_still_raises_helpfully(self):
@@ -76,6 +77,25 @@ class TestParseFilename(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     pdf_loader._parse_filename(name)
 
+    def test_a_job_number_suffix_is_parsed(self):
+        """A second attempt at the same role: {staff}_{role}_assignment_{job}.pdf."""
+        self.assertEqual(
+            pdf_loader._parse_filename("860775_LTC_assignment_17073.pdf"),
+            ("860775", "LTC", "17073"),
+        )
+
+    def test_a_job_number_suffix_works_with_a_multiword_role(self):
+        self.assertEqual(
+            pdf_loader._parse_filename("872524_TFO TRI_assignment_17073.pdf"),
+            ("872524", "TFO TRI", "17073"),
+        )
+
+    def test_a_non_numeric_suffix_after_assignment_still_raises(self):
+        """Only digits are accepted as a job number — anything else is just
+        a malformed filename, not a new convention."""
+        with self.assertRaises(ValueError):
+            pdf_loader._parse_filename("12345_LTC_assignment_final.pdf")
+
 
 class TestValidRoles(unittest.TestCase):
     def test_all_four_roles_are_accepted(self):
@@ -95,6 +115,48 @@ class TestValidRoles(unittest.TestCase):
         tfo_tri = pdf_loader._parse_filename("872524_TFO TRI_assignment.pdf")
         self.assertEqual(tri[0], tfo_tri[0])   # same candidate
         self.assertNotEqual(tri[1], tfo_tri[1])  # different role
+
+
+class TestLoadEssaysDuplicates(unittest.TestCase):
+    """A job number lets a second attempt at the same role coexist instead
+    of crashing the whole run — see pdf_loader.load_essays's duplicate
+    check."""
+
+    def _folder(self, names):
+        folder = Path(tempfile.mkdtemp())
+        for name in names:
+            (folder / name).write_bytes(b"%PDF-1.4\n%%EOF")
+        return folder
+
+    def test_two_job_numbered_attempts_at_the_same_role_both_load(self):
+        folder = self._folder([
+            "860775_LTC_assignment.pdf",
+            "860775_LTC_assignment_17073.pdf",
+        ])
+        essays = pdf_loader.load_essays(str(folder))
+        self.assertEqual(len(essays), 2)
+        job_numbers = sorted(e["job_number"] for e in essays)
+        self.assertEqual(job_numbers, ["", "17073"])
+
+    def test_two_files_with_the_same_job_number_still_raise(self):
+        folder = self._folder([
+            "860775_LTC_assignment_17073.pdf",
+            "860775_LTC_assignment_17073.docx",
+        ])
+        with self.assertRaises(ValueError) as ctx:
+            pdf_loader.load_essays(str(folder))
+        self.assertIn("Duplicate submission", str(ctx.exception))
+
+    def test_two_old_style_files_for_the_same_role_still_raise(self):
+        """Unchanged: without a job number, two files for the same role are
+        still an unresolvable duplicate."""
+        folder = self._folder([
+            "860775_LTC_assignment.pdf",
+            "860775_LTC_assignment.docx",
+        ])
+        with self.assertRaises(ValueError) as ctx:
+            pdf_loader.load_essays(str(folder))
+        self.assertIn("Duplicate submission", str(ctx.exception))
 
 
 if __name__ == "__main__":

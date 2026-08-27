@@ -50,10 +50,11 @@ def _row(created, staff, role="TRI", decision="", approval=""):
 
 def _app(
     staff, date, role="TRI", decision="", approval="", year="",
-    idp_decision="", idp_approval="",
+    idp_decision="", idp_approval="", job_number="",
 ):
     return rl.Application(
-        staff, date, role, decision, approval, year, idp_decision, idp_approval
+        staff, date, role, decision, approval, year,
+        idp_decision, idp_approval, job_number,
     )
 
 
@@ -173,6 +174,19 @@ class TestLoadApplications(unittest.TestCase):
         apps = rl.load_applications(path)
         self.assertEqual(apps[0].idp_sim_decision, "NO")
         self.assertEqual(apps[0].final_idp_approval, "REJECTED")
+
+    def test_reads_the_job_number_from_its_truncated_odata_header(self):
+        """The real export truncates 'applied for' to 'applied_x' at
+        SharePoint's 32-char internal-name limit; a prefix match still finds
+        it."""
+        headers = ODATA_HEADERS + ",JOB_x0020_NUMBER_x0020_applied_x"
+        row = _odata_row("2026-06-04T13:26:07Z", "1", "LTC") + ",17073"
+        path = _csv([row], headers=headers)
+        self.assertEqual(rl.load_applications(path)[0].job_number, "17073")
+
+    def test_missing_job_number_column_defaults_to_blank(self):
+        path = _csv([_row("28/07/2026 09:00", "1")])
+        self.assertEqual(rl.load_applications(path)[0].job_number, "")
 
     def test_a_companion_id_column_does_not_shadow_its_real_column(self):
         """'Position applied for#Id' shares a prefix with the column we want."""
@@ -457,6 +471,25 @@ class TestFindExport(unittest.TestCase):
         message = str(caught.exception)
         self.assertIn(str(folder), message)
         self.assertIn("Recruitment_Export", message)
+
+
+class TestRowsFor(unittest.TestCase):
+    """Scopes the List to one candidate within one campaign — the lookup
+    _apply_job_numbers uses to back-fill an old-style filename's Job
+    Number."""
+
+    def test_scoped_to_staff_and_campaign(self):
+        apps = [
+            _app("100", _date("2026-07-28"), "LTC", year="FY26", job_number="1"),
+            _app("100", _date("2026-10-12"), "TRI", year="FY27", job_number="2"),
+            _app("200", _date("2026-07-28"), "LTC", year="FY26", job_number="3"),
+        ]
+        rows = rl.rows_for(apps, "100", "FY26")
+        self.assertEqual([r.job_number for r in rows], ["1"])
+
+    def test_no_match_is_an_empty_list(self):
+        apps = [_app("100", _date("2026-07-28"), "LTC", year="FY26")]
+        self.assertEqual(rl.rows_for(apps, "999", "FY26"), [])
 
 
 class TestApplicationHistory(unittest.TestCase):

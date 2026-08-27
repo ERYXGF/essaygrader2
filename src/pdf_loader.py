@@ -2,10 +2,15 @@
 
 Expected filename convention:
     {candidate_number}_{role}_assignment.{extension}
+    {candidate_number}_{role}_assignment_{job_number}.{extension}
 
 where:
     - candidate_number is one or more digits
     - role is one of LTC, TFO, TRI
+    - job_number (optional) is the Master List's own per-application id —
+      present only when this candidate submitted more than one written
+      assignment for the same role, to tell the attempts apart. Absent for
+      every submission that doesn't need it, which today is all of them.
 
 Filenames that don't match raise an error — fail fast, don't guess.
 
@@ -52,7 +57,8 @@ ROLE_ALIASES = {"TFO_TRI": "TFO TRI"}
 WRONG_FORMAT_FLAG = "wrong format"
 FORMAT_OK_LABEL = "OK"
 
-# Strict filename pattern: digits, underscore, role, "_assignment", any
+# Strict filename pattern: digits, underscore, role, "_assignment", an
+# optional "_{job_number}" for a second attempt at the same role, then any
 # extension. Anchored with ^ and $ so partial matches are rejected.
 #
 # The role group allows spaces and underscores so multi-word roles like
@@ -61,7 +67,8 @@ FORMAT_OK_LABEL = "OK"
 # real gatekeeper, so a mistyped role still gets a clear error rather than being
 # quietly accepted.
 FILENAME_PATTERN = re.compile(
-    r"^(?P<number>\d+)_(?P<role>[A-Z_ ]+)_assignment\.(?P<extension>[A-Za-z0-9]+)$"
+    r"^(?P<number>\d+)_(?P<role>[A-Z_ ]+)_assignment"
+    r"(?:_(?P<job_number>\d+))?\.(?P<extension>[A-Za-z0-9]+)$"
 )
 
 
@@ -74,6 +81,9 @@ def load_essays(folder_path: str) -> List[Dict]:
     Each record is a dict with:
         - candidate_number: str (e.g. "12345")
         - role: str (one of "LTC", "TFO", "TRI")
+        - job_number: str (the Master List's per-application id, from the
+          filename; "" when the filename doesn't carry one, which is every
+          submission that isn't a second attempt at the same role)
         - essay_text: str (extracted text; "" only when unreadable)
         - file_sha256: str (hash of the raw file bytes — the submission's
           identity for caching; "" if the file could not be read)
@@ -91,9 +101,9 @@ def load_essays(folder_path: str) -> List[Dict]:
     ------
     FileNotFoundError : if the folder doesn't exist
     ValueError        : if the folder is empty, a filename is malformed, a
-                        role is unrecognised, or a candidate number + role
-                        combination is duplicated. Unreadable files are
-                        flagged, not raised.
+                        role is unrecognised, or a candidate number + role +
+                        job number combination is duplicated. Unreadable
+                        files are flagged, not raised.
     """
     folder = Path(folder_path)
 
@@ -111,16 +121,19 @@ def load_essays(folder_path: str) -> List[Dict]:
     if not paths:
         raise ValueError(f"No files found in {folder}")
 
-    seen: Dict[Tuple[str, str], str] = {}  # (candidate_number, role) -> filename
+    # (candidate_number, role, job_number) -> filename
+    seen: Dict[Tuple[str, str, str], str] = {}
     essays: List[Dict] = []
 
     for path in paths:
-        candidate_number, role = _parse_filename(path.name)
+        candidate_number, role, job_number = _parse_filename(path.name)
 
         # Duplicate check. A candidate may legitimately apply for more than
-        # one role (e.g. "11111_LTC_..." alongside "11111_TRI_..."), so only
-        # the same number AND role counts as a duplicate.
-        key = (candidate_number, role)
+        # one role (e.g. "11111_LTC_..." alongside "11111_TRI_..."), and may
+        # legitimately submit twice for the *same* role if the second
+        # attempt carries a job number — so only the same number, role AND
+        # job number together counts as a duplicate.
+        key = (candidate_number, role, job_number)
         if key in seen:
             raise ValueError(
                 f"Duplicate submission for candidate {candidate_number}, "
@@ -133,12 +146,15 @@ def load_essays(folder_path: str) -> List[Dict]:
             essay_text, file_format = extract_text(path)
         except UnreadableSubmission as exc:
             essays.append(
-                _record(path, candidate_number, role, "", FORMAT_UNKNOWN, str(exc))
+                _record(
+                    path, candidate_number, role, job_number,
+                    "", FORMAT_UNKNOWN, str(exc),
+                )
             )
             continue
 
         essays.append(
-            _record(path, candidate_number, role, essay_text, file_format)
+            _record(path, candidate_number, role, job_number, essay_text, file_format)
         )
 
     return essays
@@ -151,6 +167,7 @@ def _record(
     path: Path,
     candidate_number: str,
     role: str,
+    job_number: str,
     essay_text: str,
     file_format: str,
     reason: str = "",
@@ -176,6 +193,7 @@ def _record(
     return {
         "candidate_number": candidate_number,
         "role": role,
+        "job_number": job_number,
         "essay_text": essay_text,
         "file_sha256": _file_hash(path),
         "source_file": path.name,
@@ -205,13 +223,17 @@ def _file_hash(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _parse_filename(filename: str) -> Tuple[str, str]:
-    """Extracts (candidate_number, role) from a filename or raises ValueError.
+def _parse_filename(filename: str) -> Tuple[str, str, str]:
+    """Extracts (candidate_number, role, job_number) from a filename, or
+    raises ValueError.
 
     The role is normalised through ROLE_ALIASES, so 'TFO_TRI' and 'TFO TRI'
     both resolve to the single canonical spelling. Everything downstream — the
     cache key, the grading prompt, the report — then sees one role, not two
     that happen to mean the same thing.
+
+    job_number is '' when the filename doesn't carry one — every submission
+    that isn't a second attempt at the same role.
     """
     match = FILENAME_PATTERN.match(filename)
     if not match:
@@ -231,4 +253,6 @@ def _parse_filename(filename: str) -> Tuple[str, str]:
             f"Valid roles: {sorted(VALID_ROLES)}"
         )
 
-    return candidate_number, role
+    job_number = match.group("job_number") or ""
+
+    return candidate_number, role, job_number

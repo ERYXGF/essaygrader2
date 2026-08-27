@@ -18,10 +18,11 @@ import grading_cache as gc
 # ------------------------------------------------------------
 # Fixtures
 # ------------------------------------------------------------
-def _essay(number, role, text):
+def _essay(number, role, text, job_number=""):
     return {
         "candidate_number": number,
         "role": role,
+        "job_number": job_number,
         "essay_text": text,
         "source_file": f"{number}_{role}_assignment.pdf",
     }
@@ -31,7 +32,7 @@ def _result(number, role, classification="Priority Interview"):
     return {"candidate_number": number, "Role": role, "classification": classification}
 
 
-def _key(number, role, campaign=""):
+def _key(number, role, campaign="", job_number=""):
     """The cache key, built the way the module builds it.
 
     Tests ask for keys through this rather than spelling the format out, so a
@@ -39,7 +40,7 @@ def _key(number, role, campaign=""):
     of string literals to hand-edit. An empty campaign resolves to FY26, which
     is what the production default does.
     """
-    return gc._cache_key(campaign, number, role)
+    return gc._cache_key(campaign, number, role, job_number)
 
 
 PROMPT_A = "Grade essays with rubric A."
@@ -145,6 +146,18 @@ class TestPartition(unittest.TestCase):
         essays = [_essay("1", "LTC", "aaa"), _essay("1", "TRI", "ccc")]
         to_grade, reused = gc.partition(essays, cache, gc.prompt_hash(PROMPT_A))
         self.assertEqual([e["role"] for e in to_grade], ["TRI"])
+        self.assertEqual(len(reused), 1)
+
+    def test_two_job_numbered_attempts_at_the_same_role_are_independent(self):
+        """A second written assignment for a role the candidate already
+        applied for must not overwrite the first attempt's grade."""
+        cache = self._seed_cache([_essay("1", "LTC", "aaa", job_number="1")], PROMPT_A)
+        essays = [
+            _essay("1", "LTC", "aaa", job_number="1"),
+            _essay("1", "LTC", "bbb", job_number="17073"),
+        ]
+        to_grade, reused = gc.partition(essays, cache, gc.prompt_hash(PROMPT_A))
+        self.assertEqual([e["job_number"] for e in to_grade], ["17073"])
         self.assertEqual(len(reused), 1)
 
 

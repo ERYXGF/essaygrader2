@@ -50,6 +50,7 @@ from recruitment_list import (
     campaign_of_application,
     application_history,
     find_export,
+    rows_for,
     DEFAULT_LIST_DIR,
 )
 from embargo import find_embargoes, describe as describe_embargo, EMBARGO_MONTHS
@@ -489,6 +490,96 @@ def _apply_embargoes(results: list, campaign: str, applications: Optional[list])
         )
 
 
+# Match Status values for the Job Number join. MATCHED is the only success;
+# every other value names exactly why the join failed, so a reviewer never
+# has to guess what an unresolved row means. A result is never dropped from
+# the report because of any of these — see _apply_job_numbers.
+MATCH_STATUS_MATCHED = "MATCHED"
+MATCH_NO_MATCHING_ROW = "NO MATCHING ROW"
+MATCH_MULTIPLE_MATCHING_ROWS = "MULTIPLE MATCHING ROWS"
+MATCH_ROLE_MISMATCH = "ROLE MISMATCH"
+MATCH_STAFF_NOT_IN_LIST = "STAFF NUMBER NOT IN LIST"
+MATCH_FY_AMBIGUOUS = "NO JOB NUMBER IN FILENAME AND FY AMBIGUOUS"
+
+# The four ways the join can fail, in the order they're reported.
+_MATCH_FAILURE_REASONS = (
+    MATCH_STAFF_NOT_IN_LIST,
+    MATCH_ROLE_MISMATCH,
+    MATCH_NO_MATCHING_ROW,
+    MATCH_MULTIPLE_MATCHING_ROWS,
+    MATCH_FY_AMBIGUOUS,
+)
+
+
+def _resolve_job_number(result: dict, campaign: str, applications: Optional[list]) -> tuple:
+    """Looks up one result's Job Number against the Master List.
+
+    Returns (job_number, match_status). A job number already on the result
+    (parsed straight from a new-style filename — see pdf_loader) is
+    cross-checked against the List rather than trusted blindly, so a
+    mistyped role on an otherwise-correct filename is still caught as
+    ROLE MISMATCH instead of silently passing through.
+
+    See the "New task: replace the Job Number ambiguous-flag with a full
+    Match Status column" section of the plan for the worked-through
+    scenarios behind each branch.
+    """
+    role = result.get("Role", result.get("role", ""))
+    number = str(result.get("candidate_number", ""))
+    filename_job_number = result.get("job_number", "")
+
+    candidate_rows = rows_for(applications or [], number, campaign)
+    if not candidate_rows:
+        return "", MATCH_STAFF_NOT_IN_LIST
+
+    if filename_job_number:
+        job_matches = [a for a in candidate_rows if a.job_number == filename_job_number]
+        if not job_matches:
+            return "", MATCH_NO_MATCHING_ROW
+        if len(job_matches) > 1:
+            return "", MATCH_MULTIPLE_MATCHING_ROWS
+        if job_matches[0].role != role:
+            return "", MATCH_ROLE_MISMATCH
+        return filename_job_number, MATCH_STATUS_MATCHED
+
+    role_matches = [a for a in candidate_rows if a.role == role]
+    if not role_matches:
+        return "", MATCH_ROLE_MISMATCH
+    if len(role_matches) > 1:
+        return "", MATCH_FY_AMBIGUOUS
+    return role_matches[0].job_number, MATCH_STATUS_MATCHED
+
+
+def _apply_job_numbers(results: list, campaign: str, applications: Optional[list]) -> None:
+    """Resolves the Job Number and Match Status for every result, in place.
+
+    Every result gets a row in the report regardless of outcome — this
+    function only annotates `results`, it never filters it, so a file whose
+    join fails still carries its full grading results through to the
+    Summary sheet for a human to attach to the right application by hand.
+    """
+    counts = Counter()
+    unmatched = []
+
+    for result in results:
+        job_number, status = _resolve_job_number(result, campaign, applications)
+        result["job_number"] = job_number
+        result["match_status"] = status
+        counts[status] += 1
+        if status != MATCH_STATUS_MATCHED:
+            unmatched.append((result.get("source_file", ""), status))
+
+    total = len(results)
+    matched = counts[MATCH_STATUS_MATCHED]
+    print(f"   ✓ Job Number match: {matched} of {total} matched")
+    for reason in _MATCH_FAILURE_REASONS:
+        print(f"     {reason}: {counts[reason]}")
+    if unmatched:
+        print("   Unmatched files:")
+        for filename, status in unmatched:
+            print(f"     - {filename}: {status}")
+
+
 def run_pipeline(
     roles: Optional[Set[str]] = None,
     dry_run: bool = False,
@@ -674,6 +765,7 @@ def run_pipeline(
     print("📋 Checking the re-application embargo...")
     _apply_embargoes(results, campaign, applications)
     _apply_submission_dates(results, applications)
+    _apply_job_numbers(results, campaign, applications)
 
     # The cross-FY view, built from the recruitment list rather than the
     # cache: the List records every application there has ever been, so this

@@ -85,16 +85,26 @@ def essay_hash(essay_text: str) -> str:
     return hashlib.sha256(normalised.encode("utf-8")).hexdigest()
 
 
-def _cache_key(campaign: str, candidate_number: str, role: str) -> str:
-    """JSON-safe key for one graded submission: campaign, candidate and role.
+def _cache_key(
+    campaign: str, candidate_number: str, role: str, job_number: str = ""
+) -> str:
+    """JSON-safe key for one graded submission: campaign, candidate, role,
+    and (when present) job number.
 
     The campaign is part of the identity because a candidate may apply in more
     than one of them. Without it, an FY27 re-application for a role the
     candidate already applied for in FY26 lands on the same key and overwrites
     last year's grade — destroying exactly the history a reviewer wants when
     the embargo flags that candidate as a re-applicant.
+
+    job_number is appended only when non-empty, so every key from before it
+    existed stays byte-identical — this cannot force a regrade of anything
+    already cached. It exists for the same reason campaign does: without it,
+    a second written assignment for a role the candidate already applied for
+    lands on the same key and silently overwrites the first attempt's grade.
     """
-    return f"{campaign or LEGACY_CAMPAIGN}|{candidate_number}|{role}"
+    base = f"{campaign or LEGACY_CAMPAIGN}|{candidate_number}|{role}"
+    return f"{base}|{job_number}" if job_number else base
 
 
 # The campaign that grades predate the `campaign` field belong to. Every grade
@@ -271,7 +281,10 @@ def record_grade(
     killed mid-write cannot corrupt what was already stored.
     """
     cache["prompt_sha256"] = current_prompt_hash
-    key = _cache_key(campaign, essay["candidate_number"], essay["role"])
+    key = _cache_key(
+        campaign, essay["candidate_number"], essay["role"],
+        essay.get("job_number", ""),
+    )
     cache["candidates"][key] = _entry(
         essay, result, current_prompt_hash, version, campaign
     )
@@ -342,7 +355,10 @@ def classify(
 
     for essay in essays:
         entry = candidates.get(
-            _cache_key(campaign, essay["candidate_number"], essay["role"])
+            _cache_key(
+                campaign, essay["candidate_number"], essay["role"],
+                essay.get("job_number", ""),
+            )
         )
 
         if not entry:
@@ -396,7 +412,10 @@ def stale_extractions(
     drifted = []
     for essay in essays:
         entry = candidates.get(
-            _cache_key(campaign, essay["candidate_number"], essay["role"])
+            _cache_key(
+                campaign, essay["candidate_number"], essay["role"],
+                essay.get("job_number", ""),
+            )
         )
         if not entry:
             continue
@@ -432,7 +451,10 @@ def partition(
         if reason in GRADE_REASONS:
             to_grade.append(essay)
         else:
-            key = _cache_key(campaign, essay["candidate_number"], essay["role"])
+            key = _cache_key(
+                campaign, essay["candidate_number"], essay["role"],
+                essay.get("job_number", ""),
+            )
             reused.append(candidates[key]["result"])
 
     return to_grade, reused
@@ -473,13 +495,19 @@ def merge_and_update(
     candidates = cache["candidates"]
 
     graded_by_key = {
-        _cache_key(campaign, essay["candidate_number"], essay["role"]): (essay, result)
+        _cache_key(
+            campaign, essay["candidate_number"], essay["role"],
+            essay.get("job_number", ""),
+        ): (essay, result)
         for essay, result in graded
     }
 
     # Write/refresh a cache entry for every essay currently in the folder.
     for essay in essays:
-        key = _cache_key(campaign, essay["candidate_number"], essay["role"])
+        key = _cache_key(
+            campaign, essay["candidate_number"], essay["role"],
+            essay.get("job_number", ""),
+        )
         if key in graded_by_key:
             result = graded_by_key[key][1]
             entry_hash, entry_version = current_prompt_hash, version
@@ -513,7 +541,10 @@ def merge_and_update(
         )
 
     folder_keys = [
-        _cache_key(campaign, e["candidate_number"], e["role"]) for e in essays
+        _cache_key(
+            campaign, e["candidate_number"], e["role"], e.get("job_number", "")
+        )
+        for e in essays
     ]
     # An essay in the folder with no cache entry has no grade to report. That
     # happens on a --report-only rebuild when a new PDF has been added but not

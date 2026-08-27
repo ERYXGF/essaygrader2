@@ -7,6 +7,14 @@ to the List on staff number AND financial year.
 
 - Summary    : one row per candidate, headline grades, colour-coded classification,
                the true Submitted date from the recruitment list,
+               a Job Number column identifying which application a written
+               assignment belongs to (from the filename when it carries one,
+               otherwise looked up in the recruitment list) and a Match
+               Status column alongside it — MATCHED, or the exact reason the
+               join failed (see main._apply_job_numbers); both are shaded
+               when the row didn't resolve, but the row itself, and its
+               grading results, are written either way — a failed join
+               never drops a row,
                a Double Application column marking candidates who applied for
                more than one role,
                an Embargo column (YES/NO/UNKNOWN) flagging candidates who
@@ -107,6 +115,8 @@ def write_report(
     summary_headers = [
         "Candidate Number",
         "Role",
+        "Job Number",
+        "Match Status",
         "Financial Year",
         "Submitted",
         "Double Application",
@@ -138,6 +148,8 @@ def write_report(
         values = [
             r.get("candidate_number", "Unknown"),
             r.get("Role", "Unknown"),
+            r.get("job_number", ""),
+            r.get("match_status", ""),
             year_of(r.get("campaign", "")),
             r.get("submitted", ""),
             "Yes" if r.get("candidate_number") in double_applicants else "No",
@@ -174,6 +186,18 @@ def write_report(
         rubric_cell = ws1.cell(row=row_idx, column=summary_headers.index("Rubric Version") + 1)
         if r.get("rubric_is_current") is False:
             rubric_cell.fill = yellow
+
+        # Job Number / Match Status: blank Job Number means the CSV join
+        # failed — Match Status names exactly why (see main._apply_job_numbers
+        # for the five possible values). "MATCHED" is spelled out here rather
+        # than imported to avoid a circular import (main.py imports this
+        # module). The row itself is written either way — a failed join never
+        # drops a row, it only leaves these two cells unresolved and shaded.
+        job_number_cell = ws1.cell(row=row_idx, column=summary_headers.index("Job Number") + 1)
+        match_status_cell = ws1.cell(row=row_idx, column=summary_headers.index("Match Status") + 1)
+        if r.get("match_status") not in ("MATCHED", "", None):
+            job_number_cell.fill = yellow
+            match_status_cell.fill = yellow
 
         # Embargo: a candidate re-applying inside the six-month window. Red
         # because the policy says they should not be in this campaign at all;

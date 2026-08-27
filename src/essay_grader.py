@@ -211,6 +211,7 @@ def grade_essays(
                 )
                 result["source_file"] = source
                 result["format_label"] = essay.get("format_label", "")
+                result["job_number"] = essay.get("job_number", "")
                 results.append(result)
                 if on_result is not None:
                     on_result(essay, result)
@@ -233,6 +234,7 @@ def grade_essays(
 
             result["source_file"] = essay.get("source_file", "")
             result["format_label"] = essay.get("format_label", "")
+            result["job_number"] = essay.get("job_number", "")
             results.append(result)
             if on_result is not None:
                 on_result(essay, result)
