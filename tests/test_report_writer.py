@@ -19,6 +19,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from openpyxl import load_workbook
+from openpyxl.utils import get_column_letter
 
 import report_writer as rw
 import essay_grader as eg
@@ -348,6 +349,22 @@ class TestSummarySheet(unittest.TestCase):
                 for h in headers
             }
             return headers, rows, fills
+
+    def test_registered_as_table1_covering_all_rows(self):
+        """The Power Automate flow binds to this by table name, not a
+        range, so the name must be exact and identical every run."""
+        results = [
+            _result("872524", "TRI", []),
+            _result("111111", "LTC", []),
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "report.xlsx"
+            rw.write_report(results, str(path))
+            ws = load_workbook(path)["Summary"]
+            self.assertEqual(set(ws.tables.keys()), {"Table1"})
+            headers = [c.value for c in ws[1]]
+            last_col = get_column_letter(len(headers))
+            self.assertEqual(ws.tables["Table1"].ref, f"A1:{last_col}3")
 
     def test_column_reports_yes_and_no(self):
         headers, rows, _ = self._summary([

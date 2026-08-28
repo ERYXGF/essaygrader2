@@ -26,7 +26,10 @@ to the List on staff number AND financial year.
                regrade),
                three feedback columns (Human Override / Override Reason /
                Reviewed) ready for the eventual RAG phase, and a Plagiarism Flag
-               column (colour-coded, empty when clean).
+               column (colour-coded, empty when clean). Registered as an
+               Excel Table named "Table1" (constant every run, no spaces)
+               so a Power Automate flow bound to it by name survives each
+               overwrite.
 - Detailed   : strengths, weaknesses, rationale, AI indicators, and one
                summary column per question. The Q1/Q2/Q3 columns are filled by
                canonical question_number, not by position in the list, so a
@@ -53,6 +56,8 @@ from typing import List, Dict, Optional
 
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment
+from openpyxl.utils import get_column_letter
+from openpyxl.worksheet.table import Table, TableStyleInfo
 
 from campaign import year_of
 
@@ -255,6 +260,18 @@ def write_report(
             class_cell.fill = red
 
     _autosize(ws1, max_width=40)
+
+    # Registered as a real Excel Table, not just a range of cells — the
+    # Power Automate flow reads this by table name ("Table1"). The name must
+    # stay identical every run (no spaces allowed either) so the flow's
+    # binding survives each overwrite; the ref auto-adjusts to however many
+    # rows/columns this run actually produced.
+    table_ref = f"A1:{get_column_letter(ws1.max_column)}{ws1.max_row}"
+    summary_table = Table(displayName="Table1", ref=table_ref)
+    summary_table.tableStyleInfo = TableStyleInfo(
+        name="TableStyleMedium9", showRowStripes=True
+    )
+    ws1.add_table(summary_table)
 
     # ============================================================
     # SHEET 2 — DETAILED
