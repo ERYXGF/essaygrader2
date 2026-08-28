@@ -30,3 +30,7 @@ essay_prompt.txt
 
 # web/ deploy logs
 logs/
+
+# Claude Code project settings — personal/machine-specific (the deploy hook
+# below names this Mac's launchd service and username)
+.claude/settings.local.json
