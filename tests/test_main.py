@@ -562,6 +562,97 @@ class TestJobNumberWiring(unittest.TestCase):
         self.assertIn("999999_TRI_assignment.pdf: STAFF NUMBER NOT IN LIST", output)
 
 
+class TestUnclaimedApplications(unittest.TestCase):
+    """_unclaimed_applications finds List rows no essay file ever
+    considered — the reverse of an unmatched file's Match Status.
+
+    A row an essay file *considered* but couldn't cleanly resolve (ROLE
+    MISMATCH, MULTIPLE MATCHING ROWS, FY AMBIGUOUS) is not "no assignment
+    file" — some file plausibly belongs to it — so those must stay out.
+    """
+
+    def _app(self, staff, role, job_number, date="2026-06-04", campaign="FY26"):
+        import datetime as dt
+        import recruitment_list as rl
+        return rl.Application(
+            staff, dt.date.fromisoformat(date), role, "", "", campaign,
+            "", "", job_number,
+        )
+
+    def _result(self, number, role, job_number=""):
+        return {
+            "candidate_number": number,
+            "Role": role,
+            "job_number": job_number,
+            "source_file": f"{number}_{role}_assignment.pdf",
+        }
+
+    def test_the_850263_shape_one_job_number_claimed_the_other_is_not(self):
+        """Two List rows for one role; only one has a written assignment."""
+        apps = [
+            self._app("850263", "LTC", "1", date="2026-06-04"),      # no file
+            self._app("850263", "LTC", "17073", date="2026-07-25"),  # has one
+        ]
+        results = [self._result("850263", "LTC", job_number="17073")]
+        referenced = main._apply_job_numbers(results, "FY26", apps)
+        unclaimed = main._unclaimed_applications(apps, "FY26", referenced)
+        self.assertEqual(len(unclaimed), 1)
+        self.assertEqual(unclaimed[0]["job_number"], "1")
+        self.assertEqual(unclaimed[0]["candidate_number"], "850263")
+
+    def test_a_candidate_with_no_essay_file_at_all_is_unclaimed(self):
+        apps = [self._app("999999", "LTC", "5")]
+        referenced = main._apply_job_numbers([], "FY26", apps)
+        unclaimed = main._unclaimed_applications(apps, "FY26", referenced)
+        self.assertEqual(len(unclaimed), 1)
+        self.assertEqual(unclaimed[0]["candidate_number"], "999999")
+
+    def test_role_mismatch_via_job_number_keeps_the_row_claimed(self):
+        """The job number is real, just filed under a different role in the
+        filename — a file clearly exists for it, so it must not also show
+        up as having no assignment on record."""
+        apps = [self._app("1", "TRI", "17073")]
+        results = [self._result("1", "LTC", job_number="17073")]  # wrong role
+        referenced = main._apply_job_numbers(results, "FY26", apps)
+        self.assertEqual(results[0]["match_status"], main.MATCH_ROLE_MISMATCH)
+        unclaimed = main._unclaimed_applications(apps, "FY26", referenced)
+        self.assertEqual(unclaimed, [])
+
+    def test_multiple_matching_rows_keeps_both_rows_claimed(self):
+        apps = [
+            self._app("1", "LTC", "17073", date="2026-06-04"),
+            self._app("1", "TRI", "17073", date="2026-07-25"),
+        ]
+        results = [self._result("1", "LTC", job_number="17073")]
+        referenced = main._apply_job_numbers(results, "FY26", apps)
+        self.assertEqual(results[0]["match_status"], main.MATCH_MULTIPLE_MATCHING_ROWS)
+        unclaimed = main._unclaimed_applications(apps, "FY26", referenced)
+        self.assertEqual(unclaimed, [])
+
+    def test_fy_ambiguous_keeps_both_role_matches_claimed(self):
+        """A file exists (no job number in its name) that could be either
+        of two same-role rows — neither should read as unclaimed."""
+        apps = [
+            self._app("1", "LTC", "1", date="2026-06-04"),
+            self._app("1", "LTC", "17073", date="2026-07-25"),
+        ]
+        results = [self._result("1", "LTC")]  # no job number in filename
+        referenced = main._apply_job_numbers(results, "FY26", apps)
+        self.assertEqual(results[0]["match_status"], main.MATCH_FY_AMBIGUOUS)
+        unclaimed = main._unclaimed_applications(apps, "FY26", referenced)
+        self.assertEqual(unclaimed, [])
+
+    def test_no_applications_returns_empty(self):
+        unclaimed = main._unclaimed_applications(None, "FY26", set())
+        self.assertEqual(unclaimed, [])
+
+    def test_a_different_campaigns_row_is_not_reported(self):
+        apps = [self._app("1", "LTC", "1", campaign="FY25")]
+        referenced = main._apply_job_numbers([], "FY26", apps)
+        unclaimed = main._unclaimed_applications(apps, "FY26", referenced)
+        self.assertEqual(unclaimed, [])
+
+
 class TestCampaignMembershipGuard(unittest.TestCase):
     """Stops a run grading another campaign's essays under this campaign's name.
 

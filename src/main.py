@@ -514,11 +514,19 @@ _MATCH_FAILURE_REASONS = (
 def _resolve_job_number(result: dict, campaign: str, applications: Optional[list]) -> tuple:
     """Looks up one result's Job Number against the Master List.
 
-    Returns (job_number, match_status). A job number already on the result
-    (parsed straight from a new-style filename — see pdf_loader) is
-    cross-checked against the List rather than trusted blindly, so a
-    mistyped role on an otherwise-correct filename is still caught as
-    ROLE MISMATCH instead of silently passing through.
+    Returns (job_number, match_status, considered). `considered` is the
+    List row(s) this lookup treated as candidates for this file — the
+    `job_matches` or `role_matches` list below, whichever branch ran (empty
+    when there was nothing to search). It exists so a List row that some
+    essay file at least *considered* — even if the outcome wasn't a clean
+    MATCHED — is never mistaken for a row with no assignment file on
+    record at all; see `_unclaimed_applications`.
+
+    A job number already on the result (parsed straight from a new-style
+    filename — see pdf_loader) is cross-checked against the List rather
+    than trusted blindly, so a mistyped role on an otherwise-correct
+    filename is still caught as ROLE MISMATCH instead of silently passing
+    through.
 
     See the "New task: replace the Job Number ambiguous-flag with a full
     Match Status column" section of the plan for the worked-through
@@ -530,44 +538,50 @@ def _resolve_job_number(result: dict, campaign: str, applications: Optional[list
 
     candidate_rows = rows_for(applications or [], number, campaign)
     if not candidate_rows:
-        return "", MATCH_STAFF_NOT_IN_LIST
+        return "", MATCH_STAFF_NOT_IN_LIST, []
 
     if filename_job_number:
         job_matches = [a for a in candidate_rows if a.job_number == filename_job_number]
         if not job_matches:
-            return "", MATCH_NO_MATCHING_ROW
+            return "", MATCH_NO_MATCHING_ROW, []
         if len(job_matches) > 1:
-            return "", MATCH_MULTIPLE_MATCHING_ROWS
+            return "", MATCH_MULTIPLE_MATCHING_ROWS, job_matches
         if job_matches[0].role != role:
-            return "", MATCH_ROLE_MISMATCH
-        return filename_job_number, MATCH_STATUS_MATCHED
+            return "", MATCH_ROLE_MISMATCH, job_matches
+        return filename_job_number, MATCH_STATUS_MATCHED, job_matches
 
     role_matches = [a for a in candidate_rows if a.role == role]
     if not role_matches:
-        return "", MATCH_ROLE_MISMATCH
+        return "", MATCH_ROLE_MISMATCH, []
     if len(role_matches) > 1:
-        return "", MATCH_FY_AMBIGUOUS
-    return role_matches[0].job_number, MATCH_STATUS_MATCHED
+        return "", MATCH_FY_AMBIGUOUS, role_matches
+    return role_matches[0].job_number, MATCH_STATUS_MATCHED, role_matches
 
 
-def _apply_job_numbers(results: list, campaign: str, applications: Optional[list]) -> None:
+def _apply_job_numbers(results: list, campaign: str, applications: Optional[list]) -> set:
     """Resolves the Job Number and Match Status for every result, in place.
 
     Every result gets a row in the report regardless of outcome — this
     function only annotates `results`, it never filters it, so a file whose
     join fails still carries its full grading results through to the
     Summary sheet for a human to attach to the right application by hand.
+
+    Returns the id()s of every List row any essay file considered a
+    candidate match, MATCHED or not — the input `_unclaimed_applications`
+    needs to find List rows no essay file ever touched at all.
     """
     counts = Counter()
     unmatched = []
+    referenced_ids = set()
 
     for result in results:
-        job_number, status = _resolve_job_number(result, campaign, applications)
+        job_number, status, considered = _resolve_job_number(result, campaign, applications)
         result["job_number"] = job_number
         result["match_status"] = status
         counts[status] += 1
         if status != MATCH_STATUS_MATCHED:
             unmatched.append((result.get("source_file", ""), status))
+        referenced_ids.update(id(a) for a in considered)
 
     total = len(results)
     matched = counts[MATCH_STATUS_MATCHED]
@@ -578,6 +592,42 @@ def _apply_job_numbers(results: list, campaign: str, applications: Optional[list
         print("   Unmatched files:")
         for filename, status in unmatched:
             print(f"     - {filename}: {status}")
+
+    return referenced_ids
+
+
+def _unclaimed_applications(
+    applications: Optional[list], campaign: str, referenced_ids: set
+) -> list:
+    """List rows in this campaign that no essay file ever considered a match.
+
+    Distinct from an unmatched *file* (Match Status on the Summary sheet):
+    this is the opposite direction — a List row, e.g. one entered manually
+    with no written assignment ever submitted for it, that no essay file's
+    Job Number resolution ever looked at. A row an essay file considered
+    but couldn't cleanly resolve (ROLE MISMATCH, MULTIPLE MATCHING ROWS,
+    NO JOB NUMBER IN FILENAME AND FY AMBIGUOUS) is not "no assignment" —
+    some file plausibly belongs to it — so those stay out of this list via
+    `referenced_ids` (see `_apply_job_numbers`).
+    """
+    if not applications:
+        return []
+
+    rows = [
+        {
+            "candidate_number": a.staff_number,
+            "campaign": campaign,
+            "role": a.role,
+            "job_number": a.job_number,
+            "submitted": a.submitted_at,
+            "interview_decision": a.interview_decision,
+            "final_approval": a.final_approval,
+        }
+        for a in applications
+        if campaign_of_application(a) == campaign and id(a) not in referenced_ids
+    ]
+    rows.sort(key=lambda r: (r["candidate_number"], r["role"]))
+    return rows
 
 
 def run_pipeline(
@@ -765,7 +815,22 @@ def run_pipeline(
     print("📋 Checking the re-application embargo...")
     _apply_embargoes(results, campaign, applications)
     _apply_submission_dates(results, applications)
-    _apply_job_numbers(results, campaign, applications)
+    referenced_ids = _apply_job_numbers(results, campaign, applications)
+
+    # List rows no essay file's Job Number resolution ever considered — e.g.
+    # one entered manually with no written assignment ever submitted for it.
+    # See _unclaimed_applications for how this differs from an unmatched file.
+    unclaimed_applications = _unclaimed_applications(applications, campaign, referenced_ids)
+    if unclaimed_applications:
+        print(
+            f"   ⚠ {len(unclaimed_applications)} List row(s) have no "
+            f"assignment file on record:"
+        )
+        for row in unclaimed_applications:
+            print(
+                f"     - {row['candidate_number']} / {row['role']} / "
+                f"job #{row['job_number']}"
+            )
 
     # The cross-FY view, built from the recruitment list rather than the
     # cache: the List records every application there has ever been, so this
@@ -784,6 +849,7 @@ def run_pipeline(
         similarity_pairs=similarity_pairs,
         history=candidate_history,
         campaign=campaign,
+        unmatched_applications=unclaimed_applications,
     )
 
     # ============================================================

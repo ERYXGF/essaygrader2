@@ -285,6 +285,55 @@ class TestHistorySheet(unittest.TestCase):
             self.assertNotIn("History", load_workbook(path).sheetnames)
 
 
+class TestUnmatchedApplicationsSheet(unittest.TestCase):
+    """The reverse of Match Status: List rows no essay file ever
+    considered, e.g. one entered manually with no assignment submitted."""
+
+    def _sheet(self, rows):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "report.xlsx"
+            rw.write_report(
+                [_result("1", "TRI", [])], str(path), unmatched_applications=rows
+            )
+            ws = load_workbook(path)["Unmatched Applications"]
+            return [[c.value for c in row] for row in ws.iter_rows()]
+
+    def _row(self, number, role, job_number, decision="NO", approval="REJECTED"):
+        return {
+            "candidate_number": number,
+            "campaign": "FY26",
+            "role": role,
+            "job_number": job_number,
+            "submitted": dt.date(2026, 6, 4),
+            "interview_decision": decision,
+            "final_approval": approval,
+        }
+
+    def test_lists_every_unclaimed_row_with_a_reason(self):
+        rows = self._sheet([self._row("850263", "LTC", "1")])
+        self.assertEqual(
+            rows[0],
+            ["Candidate Number", "Financial Year", "Role", "Job Number",
+             "Submitted", "Interview Decision", "Final Approval", "Reason"],
+        )
+        self.assertEqual(rows[1][0], "850263")
+        self.assertEqual(rows[1][1], 2026)  # the number the flows join on
+        self.assertEqual(rows[1][3], "1")
+        self.assertEqual(rows[1][7], "NO ASSIGNMENT FILE ON RECORD")
+
+    def test_an_empty_list_says_so_rather_than_looking_broken(self):
+        rows = self._sheet([])
+        self.assertIn("matching essay file", str(rows[1][0]))
+
+    def test_the_sheet_is_absent_when_none_is_passed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "report.xlsx"
+            rw.write_report([_result("1", "TRI", [])], str(path))
+            self.assertNotIn(
+                "Unmatched Applications", load_workbook(path).sheetnames
+            )
+
+
 class TestSummarySheet(unittest.TestCase):
     def _summary(self, results):
         with tempfile.TemporaryDirectory() as tmp:

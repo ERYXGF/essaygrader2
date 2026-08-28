@@ -1,6 +1,6 @@
 """Writes the Excel grading report.
- 
-The report has up to four sheets:
+
+The report has up to five sheets:
 Every sheet carries a Financial Year column, as the number the recruitment
 List records (2026, not FY26), because downstream automation joins the workbook
 to the List on staff number AND financial year.
@@ -38,6 +38,13 @@ to the List on staff number AND financial year.
                campaign, so a returning candidate's earlier grades are visible
                beside the current one. The only sheet that crosses campaign
                boundaries (only written when history is provided).
+- Unmatched Applications : the reverse of Match Status — List rows in this
+               campaign that no essay file's Job Number resolution ever
+               considered, e.g. one entered manually with no written
+               assignment ever submitted for it. A row an essay file
+               considered but couldn't cleanly resolve is not here; see
+               main._unclaimed_applications (only written when
+               unmatched_applications is provided).
 """
 
 import datetime as dt
@@ -67,6 +74,7 @@ def write_report(
     similarity_pairs: Optional[List[Dict]] = None,
     history: Optional[List[Dict]] = None,
     campaign: str = "",
+    unmatched_applications: Optional[List[Dict]] = None,
 ) -> None:
     """Writes the grading results to an .xlsx file at output_path.
 
@@ -82,6 +90,11 @@ def write_report(
     campaign is this run's campaign ('FY26'). It stamps the Similarity
     sheet, whose rows are pairs and so carry no campaign of their own —
     sound because the screen only ever compares within one campaign.
+
+    unmatched_applications is main._unclaimed_applications() — List rows in
+    this campaign no essay file's Job Number resolution ever considered.
+    Pass None to skip the Unmatched Applications sheet; an empty list writes
+    it with a "none found" row, same convention as similarity_pairs.
     """
     if not results:
         raise ValueError("No results provided to write report")
@@ -304,6 +317,12 @@ def write_report(
     if history is not None:
         _write_history_sheet(wb, history, header_font)
 
+    # ============================================================
+    # SHEET 5 — UNMATCHED APPLICATIONS (List rows no essay file considered)
+    # ============================================================
+    if unmatched_applications is not None:
+        _write_unmatched_applications_sheet(wb, unmatched_applications, header_font)
+
     # =========================
     # SAVE
     # =========================
@@ -427,6 +446,58 @@ def _write_history_sheet(
             row.get("submitted", ""),
             row.get("interview_decision", ""),
             row.get("final_approval", ""),
+        ]
+        for col, val in enumerate(values, 1):
+            _write_date(ws.cell(row=row_idx, column=col), val)
+
+    _autosize(ws, max_width=40)
+
+
+def _write_unmatched_applications_sheet(
+    wb: Workbook, unmatched_applications: List[Dict], header_font: Font
+) -> None:
+    """One row per List row this campaign that no essay file ever
+    considered a match for — see main._unclaimed_applications.
+
+    The reverse of the Summary sheet's Match Status column: that reports an
+    essay file that couldn't be joined to a List row; this reports a List
+    row with no essay file on record at all, e.g. one entered manually with
+    no written assignment ever submitted for it.
+    """
+    ws = wb.create_sheet(title="Unmatched Applications")
+
+    headers = [
+        "Candidate Number",
+        "Financial Year",
+        "Role",
+        "Job Number",
+        "Submitted",
+        "Interview Decision",
+        "Final Approval",
+        "Reason",
+    ]
+    for col, h in enumerate(headers, 1):
+        cell = ws.cell(row=1, column=col, value=h)
+        cell.font = header_font
+
+    if not unmatched_applications:
+        ws.cell(
+            row=2, column=1,
+            value="Every List row this campaign has a matching essay file.",
+        )
+        _autosize(ws, max_width=40)
+        return
+
+    for row_idx, row in enumerate(unmatched_applications, start=2):
+        values = [
+            row.get("candidate_number", ""),
+            year_of(row.get("campaign", "")),
+            row.get("role", ""),
+            row.get("job_number", ""),
+            row.get("submitted", ""),
+            row.get("interview_decision", ""),
+            row.get("final_approval", ""),
+            "NO ASSIGNMENT FILE ON RECORD",
         ]
         for col, val in enumerate(values, 1):
             _write_date(ws.cell(row=row_idx, column=col), val)
