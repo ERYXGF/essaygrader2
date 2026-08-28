@@ -307,7 +307,7 @@ class TestSummarySheet(unittest.TestCase):
             _result("111111", "LTC", []),
         ])
         col = headers.index("Double Application")
-        self.assertEqual([r[col] for r in rows], ["Yes", "Yes", "No"])
+        self.assertEqual([r[col] for r in rows], ["YES", "YES", "NO"])
 
     def test_campaign_and_submitted_are_written(self):
         row = _result("1", "TRI", [])

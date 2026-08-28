@@ -152,7 +152,7 @@ def write_report(
             r.get("match_status", ""),
             year_of(r.get("campaign", "")),
             r.get("submitted", ""),
-            "Yes" if r.get("candidate_number") in double_applicants else "No",
+            "YES" if r.get("candidate_number") in double_applicants else "NO",
             r.get("embargo", ""),
             r.get("embargo_detail", ""),
             r.get("classification", "Unknown"),
