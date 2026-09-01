@@ -16,11 +16,19 @@
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   }
   main { max-width: 46rem; margin: 0 auto; padding: 2rem 1.25rem 4rem; }
-  header { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 1.25rem; }
+  header { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 1.25rem; }
   h1 { font-size: 1.4rem; margin: 0; }
   h1 span { color: var(--accent); }
   /* Bump on every shipped change — the only place this number lives. */
   .version-tag { color: var(--muted); font-size: .7rem; font-weight: 400; margin-left: .4rem; }
+  .backend-status {
+    margin: .3rem 0 0; font-size: .8rem; color: var(--muted);
+    display: flex; align-items: center; gap: .45rem;
+  }
+  .backend-dot { display: inline-block; width: .6rem; height: .6rem; border-radius: 9999px; flex-shrink: 0; }
+  .backend-dot.loading { background: var(--warn); }
+  .backend-dot.ok { background: var(--good); }
+  .backend-dot.error { background: var(--bad); }
   #logout {
     background: none; border: 1px solid var(--border); color: var(--muted);
     border-radius: .5rem; padding: .35rem .75rem; font-size: .8rem; cursor: pointer;
@@ -113,7 +121,13 @@
 <body>
 <main>
   <header>
-    <h1>essaygrader<span>2</span><small class="version-tag">v1.1</small></h1>
+    <div>
+      <h1>essaygrader<span>2</span><small class="version-tag">v1.1</small></h1>
+      <p class="backend-status">
+        <span id="backendDot" class="backend-dot loading" aria-hidden="true"></span>
+        <span id="backendLabel">connecting…</span>
+      </p>
+    </div>
     <button id="logout">Sign out</button>
   </header>
 
@@ -207,6 +221,15 @@
     el.classList.remove("hidden");
   }
 
+  // Confidence indicator, same pattern as lessonplanner's dot: amber while
+  // the first call is in flight, green once /api/status succeeds, red if it
+  // fails. Reflects live reachability, not just the state at page load.
+  const BACKEND_LABELS = { loading: "connecting…", ok: "connected", error: "unreachable" };
+  function setBackendStatus(kind) {
+    $("backendDot").className = "backend-dot " + kind;
+    $("backendLabel").textContent = BACKEND_LABELS[kind];
+  }
+
   function showOnly(sectionId) {
     ["uploadSection", "previewSection", "progressSection", "doneSection"].forEach((id) => {
       $(id).classList.toggle("hidden", id !== sectionId && id !== "uploadSection");
@@ -232,6 +255,7 @@
     try {
       const query = fy ? "?fy=" + encodeURIComponent(fy) : "";
       const status = await api("/api/status" + query);
+      setBackendStatus("ok");
       if (selectedFY === null) {
         // First load: seed the dropdown from config/campaign.txt's real value.
         selectedFY = status.default_campaign;
@@ -246,6 +270,7 @@
       }
       return status;
     } catch (e) {
+      setBackendStatus("error");
       showError("Could not reach essaygrader2: " + e.message);
       return null;
     }
@@ -477,6 +502,7 @@
   async function pollStatus() {
     try {
       const status = await api("/api/status");
+      setBackendStatus("ok");
       const job = status.job;
       if (job.state === "running") {
         renderJob(job);
@@ -485,6 +511,7 @@
         renderDone(job);
       }
     } catch (e) {
+      setBackendStatus("error");
       showError(e.message);
     }
   }
