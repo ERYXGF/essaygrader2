@@ -469,16 +469,22 @@ class TestDoubleApplicationWiring(unittest.TestCase):
     mean two interviews for one person."""
 
     def _list(self, rows):
-        """rows are (created, staff, role, job, decision, approval)."""
+        """rows are (created, staff, role, job, decision, approval), optionally
+        followed by (invited_to_interview, actual_interview_date)."""
         handle = tempfile.NamedTemporaryFile(
             "w", suffix=".csv", delete=False, encoding="utf-8-sig", newline=""
         )
         handle.write(
             "Created,Staff Number,Position applied for,DECISION,FINALAPPROVAL,"
-            "JOB NUMBER APPLIED FOR\n"
+            "JOB NUMBER APPLIED FOR,INTERVIEW,ACTUALINTERVIEWDATE\n"
         )
-        for created, staff, role, job, decision, approval in rows:
-            handle.write(f"{created},{staff},{role},{decision},{approval},{job}\n")
+        for row in rows:
+            created, staff, role, job, decision, approval = row[:6]
+            invited, interviewed = (tuple(row[6:]) + ("", ""))[:2]
+            handle.write(
+                f"{created},{staff},{role},{decision},{approval},{job},"
+                f"{invited},{interviewed}\n"
+            )
         handle.close()
         return main._load_applications(handle.name)
 
@@ -517,25 +523,52 @@ class TestDoubleApplicationWiring(unittest.TestCase):
         )
         self.assertEqual(results[0]["double_application"], "NO")
 
-    def test_a_rejected_or_approved_other_application_does_not_count(self):
-        for decision, approval in (
-            ("NO", "PENDING"), ("YES", "APPROVED"), ("PENDING", "REJECTED"),
-            ("YES", "HOLD"),  # closed, though not a rejection
-        ):
+    def test_the_flag_is_kept_once_the_other_application_closes(self):
+        """History, not just live state: the two were open together, so the
+        flag stays whatever became of the other one."""
+        cases = {
+            ("NO", "REJECTED"): "rejected at interview on 01 Sep 2026",
+            ("YES", "APPROVED"): "approved",
+            ("YES", "HOLD"): "on hold",
+        }
+        for (decision, approval), outcome in cases.items():
             results = self._apply(
                 [("25/07/2026 09:00", "100", "LTC", "1", "", ""),
-                 ("28/07/2026 09:00", "100", "TRI", "2", decision, approval)],
+                 ("28/07/2026 09:00", "100", "TRI", "2", decision, approval,
+                  "YES", "01/09/2026")],
                 [{"candidate_number": "100", "job_number": "1"}],
             )
-            self.assertEqual(results[0]["double_application"], "NO", (decision, approval))
+            self.assertEqual(results[0]["double_application"], "YES", outcome)
+            self.assertIn(
+                f"Also applied: TRI job 2 (FY26, submitted 28 Jul 2026) — {outcome}",
+                results[0]["double_application_detail"],
+            )
 
-    def test_the_row_s_own_application_rejected_is_not_flagged(self):
+    def test_the_real_872524_case_flags_both_jobs(self):
+        """LTC 17074 was not taken to interview; TRI 17092 was rejected at
+        interview on 1 Sep. Both were live together on 28 Jul."""
         results = self._apply(
-            [("25/07/2026 09:00", "100", "LTC", "1", "NO", "REJECTED"),
-             ("28/07/2026 09:00", "100", "TRI", "2", "", "")],
-            [{"candidate_number": "100", "job_number": "1"}],
+            [("25/07/2026 09:00", "872524", "LTC", "17074", "PENDING", "PENDING",
+              "NO", ""),
+             ("28/07/2026 09:00", "872524", "TRI", "17092", "NO", "REJECTED",
+              "YES", "01/09/2026")],
+            [{"candidate_number": "872524", "job_number": "17074"},
+             {"candidate_number": "872524", "job_number": "17092"}],
         )
-        self.assertEqual(results[0]["double_application"], "NO")
+        self.assertEqual([r["double_application"] for r in results], ["YES", "YES"])
+        self.assertIn("not taken to interview", results[1]["double_application_detail"])
+
+    def test_an_application_closed_before_the_other_was_made_is_not_a_double(self):
+        """Interviewed and rejected on 26 Jul; the 28 Jul one is a
+        re-application, not a double."""
+        results = self._apply(
+            [("25/07/2026 09:00", "100", "LTC", "1", "NO", "REJECTED",
+              "YES", "26/07/2026"),
+             ("28/07/2026 09:00", "100", "TRI", "2", "", "")],
+            [{"candidate_number": "100", "job_number": "1"},
+             {"candidate_number": "100", "job_number": "2"}],
+        )
+        self.assertEqual([r["double_application"] for r in results], ["NO", "NO"])
 
     def test_a_row_without_a_job_number_falls_back_to_the_person(self):
         results = self._apply(

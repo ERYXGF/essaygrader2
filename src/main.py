@@ -49,6 +49,8 @@ from recruitment_list import (
     submitted_for,
     campaign_of_application,
     double_applications,
+    closed_on,
+    was_rejected,
     application_history,
     find_export,
     rows_for,
@@ -496,11 +498,12 @@ def _apply_double_applications(
     results: list, campaign: str, applications: Optional[list]
 ) -> None:
     """Annotates each result with Double Application YES/NO and a detail
-    naming the other open application(s), in place.
+    naming the other application(s) and what became of them, in place.
 
     Judged from the List (`recruitment_list.double_applications`): another
-    application by the same person, still open, in this or a neighbouring
-    financial year. Looked up per job number, falling back to the person
+    application by the same person, in this or a neighbouring financial
+    year, that was live at the same time — kept as history once either is
+    rejected, approved or on hold. Looked up per job number, falling back to the person
     when the row's Job Number join failed. Where the List can't answer — no
     List at all, or the candidate isn't in it — the row is left unannotated
     and report_writer falls back to counting the report's own rows, so the
@@ -527,16 +530,39 @@ def _apply_double_applications(
         others = list({id(o): o for o in others}.values())
         result["double_application"] = "YES" if others else "NO"
         result["double_application_detail"] = "; ".join(
-            f"Also open: {o.role or 'unknown role'}"
-            + (f" job {o.job_number}" if o.job_number else "")
-            + f" ({campaign_of_application(o)}, submitted "
-            f"{o.submitted_at.strftime('%d %b %Y')}, "
-            f"interview: {o.interview_decision or 'not recorded'})"
-            for o in others
+            _describe_other_application(o) for o in others
         )
         flagged += bool(others)
 
     print(f"   ✓ Double application check: {flagged} flagged")
+
+
+def _describe_other_application(other) -> str:
+    """One entry of Double Application Detail: the other application, and
+    whether it is still open or how it closed."""
+    label = (
+        f"{other.role or 'unknown role'}"
+        + (f" job {other.job_number}" if other.job_number else "")
+        + f" ({campaign_of_application(other)}, submitted "
+        f"{other.submitted_at.strftime('%d %b %Y')}"
+    )
+    closed = closed_on(other)
+    if closed is None:
+        return (
+            f"Also open: {label}, "
+            f"interview: {other.interview_decision or 'not recorded'})"
+        )
+    if other.invited_to_interview == "NO":
+        outcome = "not taken to interview"
+    elif was_rejected(other) and closed[1] == "interview":
+        outcome = f"rejected at interview on {closed[0].strftime('%d %b %Y')}"
+    elif was_rejected(other):
+        outcome = "rejected (no interview date recorded)"
+    elif "APPROVED" in (other.final_approval, other.final_idp_approval):
+        outcome = "approved"
+    else:
+        outcome = "on hold"
+    return f"Also applied: {label}) — {outcome}"
 
 
 # Match Status values for the Job Number join. MATCHED is the only success;

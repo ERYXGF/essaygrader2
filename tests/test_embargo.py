@@ -450,27 +450,58 @@ class TestInterviewDate(unittest.TestCase):
         ]
         self.assertIn(("100", "1"), eb.find_embargoes(apps, "FY26"))
 
-    def test_an_application_already_rejected_is_not_embargoed_by_a_later_one(self):
-        """Real case: 860775's job 1 was rejected (4 Jun) before job 17073
-        was even submitted — it was never open alongside it."""
+    def test_an_application_rejected_at_interview_before_the_next_is_not_a_double(self):
+        """Job 1 was interviewed and rejected (20 Jun) before job 2 was even
+        submitted — never open alongside it, so job 2 is a re-application and
+        job 1 is not embargoed by job 2's later rejection."""
         apps = [
-            _app("860775", _date("2026-06-04"), "LTC", decision="NO",
-                 job_number="1"),
-            _app("860775", _date("2026-07-15"), "LTC", decision="NO",
-                 interviewed=_date("2026-08-21"), job_number="17073"),
+            _app("100", _date("2026-06-04"), "LTC", decision="NO",
+                 interviewed=_date("2026-06-20"), job_number="1"),
+            _app("100", _date("2026-07-15"), "LTC", decision="NO",
+                 interviewed=_date("2026-08-21"), job_number="2"),
         ]
-        self.assertNotIn(("860775", "1"), eb.find_embargoes(apps, "FY26"))
+        found = eb.find_embargoes(apps, "FY26")
+        self.assertNotIn(("100", "1"), found)
+        self.assertFalse(found[("100", "2")].is_double)
+
+    def test_an_undated_rejection_in_the_same_season_is_a_double(self):
+        """Not taken to interview, with no date for that decision: within a
+        season it is assumed to come after the round's other applications,
+        so the two halves embargo each other."""
+        apps = [
+            rl.Application("872524", _date("2026-07-25"), "LTC", "PENDING",
+                           "PENDING", "", "", "", "17074", None, "NO"),
+            rl.Application("872524", _date("2026-07-28"), "TRI", "NO",
+                           "REJECTED", "", "", "", "17092", _date("2026-09-01"), "YES"),
+        ]
+        found = eb.find_embargoes(apps, "FY26")
+        self.assertEqual(set(found), {("872524", "17074"), ("872524", "17092")})
+        self.assertTrue(all(e.is_double for e in found.values()))
+        self.assertTrue(eb.describe(found[("872524", "17092")]).startswith(
+            "⚠ Double application — LTC job 17074 (FY26) — not taken to interview"
+        ))
+
+    def test_an_undated_rejection_in_an_earlier_season_starts_from_created(self):
+        apps = [
+            rl.Application("100", _date("2026-07-28"), "LTC", "", "", "", "", "",
+                           "1", None, "NO"),                        # FY26
+            _app("100", _date("2026-10-15"), job_number="2"),       # FY27
+        ]
+        embargo = eb.find_embargoes(apps, "FY27")[("100", "2")]
+        self.assertFalse(embargo.is_double)
+        self.assertEqual(embargo.days_apart, 79)
 
     def test_a_re_application_beats_a_double_application(self):
         apps = [
-            _app("100", _date("2026-03-01"), decision="NO", job_number="1"),
+            _app("100", _date("2026-03-01"), decision="NO",
+                 interviewed=_date("2026-03-20"), job_number="1"),
             _app("100", _date("2026-07-01"), job_number="2"),
             _app("100", _date("2026-07-02"), decision="NO",
                  interviewed=_date("2026-08-01"), job_number="3"),
         ]
         embargo = eb.find_embargoes(apps, "FY26")[("100", "2")]
         self.assertFalse(embargo.is_double)
-        self.assertEqual(embargo.days_apart, 122)
+        self.assertEqual(embargo.days_apart, 103)
 
     def test_the_flag_is_on_the_job_applied_for_after_the_rejection(self):
         """Real case: 850263's LTC (job 1) was rejected at interview on
@@ -519,6 +550,20 @@ class TestInterviewDate(unittest.TestCase):
         self.assertEqual(
             rl.load_applications(path)[0].interview_date, _date("2026-05-04")
         )
+
+    def test_loader_reads_the_interview_column_as_an_application_stage_rejection(self):
+        headers = HEADERS + ",INTERVIEW,INTERVIEWDATE"
+        path = _csv([_row("01/03/2026 10:00", "100", decision="PENDING") + ",NO,"], headers)
+        app = rl.load_applications(path)[0]
+        self.assertEqual(app.invited_to_interview, "NO")
+        self.assertTrue(rl.was_rejected(app))
+        self.assertEqual(rl.closed_on(app), (_date("2026-03-01"), "application"))
+
+    def test_the_interview_column_is_never_found_by_prefix(self):
+        """INTERVIEWDATE alone must not be mistaken for INTERVIEW."""
+        headers = HEADERS + ",INTERVIEWDATE"
+        path = _csv([_row("01/03/2026 10:00", "100") + ",2026-04-10T08:00:00Z"], headers)
+        self.assertEqual(rl.load_applications(path)[0].invited_to_interview, "")
 
     def test_a_planned_interview_that_never_happened_is_ignored(self):
         headers = HEADERS + ",INTERVIEWDATE,ACTUALINTERVIEWDATE"

@@ -357,16 +357,21 @@ rejection. The Summary's `Embargo` column flags an application in two cases:
 - **Re-application.** It was submitted within six months *after* another of
   the candidate's applications was rejected. The six months run from the
   rejected application's actual interview date (`ACTUALINTERVIEWDATE`). If
-  there was no interview because the application form itself was rejected,
-  they run from its `Created` date. The planned `INTERVIEWDATE` is not used.
-- **Double application.** It was still open when another of the candidate's
-  applications, in the same or a neighbouring financial year, was rejected.
-  A rejection on one half of a double application counts against the other,
-  even if the other was submitted first.
+  there was no interview, they run from its `Created` date. The planned
+  `INTERVIEWDATE` is not used.
+- **Double application.** Another of the candidate's applications that was
+  live at the same time (see *Double Application* below) was rejected. A
+  rejection on one half of a double application counts against the other,
+  whichever was submitted or decided first.
 
 - **Any role counts:** the embargo attaches to the person, not the post.
-- **Only a rejection counts:** `INTERVIEW DECISION` or `IDP SIM DECISION` =
-  `NO`, or `FINAL APPROVAL` or `FINAL IDP APPROVAL` = `REJECTED`.
+- **Only a rejection counts,** at any stage: `INTERVIEW` = `NO` (not taken to
+  interview), `INTERVIEW DECISION` or `IDP SIM DECISION` = `NO`, or
+  `FINAL APPROVAL` or `FINAL IDP APPROVAL` = `REJECTED`. Any one is enough.
+- **Undated rejections.** The List records no date for a "not taken to
+  interview" decision. Within a season, it is assumed to come after the
+  season's other applications were made, so they count as a double
+  application. Across seasons, `Created` stands in for it.
 - **Per job:** the flag goes on the application submitted after the rejection
   (matched by Job Number), not on the rejected job's own row. A row whose Job
   Number match failed falls back to the staff number, so a failed match never
@@ -391,15 +396,21 @@ outright, and `UNKNOWN` says the opposite just as plainly.
 ### Double Application
 
 The aim is to make sure no one is interviewed twice. `Double Application` is
-`YES` when the candidate has another application that is **still open** (not
-rejected, not approved, and Final Approval not on HOLD) in the **same or a neighbouring financial year**. This
-row's own application must be open too. Because it reads the recruitment List,
-it catches an application made just the other side of 1 October, which is not
-a row of this report. `Double Application Detail` names each other open
-application, with its interview decision.
+`YES` when the candidate has another application in the **same or a
+neighbouring financial year** that was **live at the same time**: each was
+submitted before the other closed. An application closes when it is rejected,
+approved or put on hold (Final Approval = HOLD), on its interview date, or on
+its `Created` date if it has none (except within a season; see *Undated
+rejections* above). Because it reads the recruitment List, it catches an
+application made just the other side of 1 October, which is not a row of
+this report.
 
-Once either application is rejected, the pair is no longer a Double
-Application. It becomes an Embargo instead (see above).
+The flag is **history**: it stays `YES` after either application closes.
+`Double Application Detail` names each other application and what became of
+it, e.g. `Also open: TRI job 17092 (FY26, submitted 28 Jul 2026, interview:
+PENDING)` or `Also applied: TRI job 17092 (FY26, submitted 28 Jul 2026) —
+rejected at interview on 01 Sep 2026`. When one half is rejected, the other
+half is also embargoed (see above).
 
 A candidate the List cannot judge (no List, or not in it) falls back to
 counting this report's own rows, with the detail `on more than one row of this

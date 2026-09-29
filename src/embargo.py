@@ -8,22 +8,21 @@ An application is flagged in two situations:
     no interview because the application form itself was rejected, from its
     **submission date** (`Created`). The new application is placed by its
     own submission date.
-  - **Double application.** The candidate had this application open when
-    another of theirs, in the same or a neighbouring financial year, was
-    rejected — even though this one was submitted first. A rejection on one
-    half of a double application counts against the other automatically.
-    "Open" means this application had not itself been rejected by then.
+  - **Double application.** Another of the candidate's applications, live
+    at the same time as this one (`recruitment_list.overlapped`), was
+    rejected. A rejection on one half of a double application counts against
+    the other automatically, whichever was submitted or decided first.
 
 Two further rules, both chosen rather than accidental:
 
   - **Any role counts.** Applying for TRI in one campaign and LTC in the next is
     still a re-application. The embargo attaches to the person, not the post.
   - **Only a rejected prior application counts.** A prior application must show
-    a rejection on at least one of its four decision fields —
-    `interview_decision` or `idp_sim_decision` equal to "NO", or
-    `final_approval` or `final_idp_approval` equal to "REJECTED" (the two
-    decision fields and the two approval fields use different enumerations —
-    see `Application`'s field comments). A candidate who was successful, or
+    a rejection at some stage — not taken to interview (`invited_to_interview`
+    "NO"), `interview_decision` or `idp_sim_decision` equal to "NO", or
+    `final_approval` or `final_idp_approval` equal to "REJECTED" (the
+    decision fields and the approval fields use different enumerations —
+    see `Application`'s field comments and `recruitment_list.was_rejected`). A candidate who was successful, or
     whose prior application is still pending a decision, does not trigger this.
 
 There is **no campaign boundary** on a re-application: an earlier rejected
@@ -49,7 +48,8 @@ from recruitment_list import (
     Application,
     by_staff_number,
     campaign_of_application,
-    campaigns_adjacent,
+    closed_on,
+    overlapped,
     was_rejected,
 )
 
@@ -64,14 +64,11 @@ class Embargo(NamedTuple):
     staff_number: str
     current: Application  # the application being assessed now
     prior: Application  # the earlier application that triggers the embargo
-    # From the prior's embargo start to the current submission; negative for
-    # a double application, whose rejection came after this submission.
-    days_apart: int
+    days_apart: int  # from the prior's embargo start to the current submission
     measured_from: str = "application"  # "interview" or "application"
-
-    @property
-    def is_double(self) -> bool:
-        return self.days_apart < 0
+    # True when the prior is the other half of a double application
+    # (`recruitment_list.overlapped`), rather than one made before this.
+    is_double: bool = False
 
     @property
     def prior_campaign(self) -> str:
@@ -95,20 +92,10 @@ def subtract_months(date: dt.date, months: int) -> dt.date:
 
 def _embargo_start(application: Application) -> Tuple[dt.date, str]:
     """Where the six months begin for a rejected application, and which date
-    that is.
-
-    The interview date when the candidate was interviewed; otherwise — the
-    application form was rejected with no interview — the submission date.
-
-    An interview dated before its own application is a data-entry error (the
-    live List has one in 2023 against a 2026 application) and is ignored in
-    favour of the submission date: trusting it would close the window early
-    and clear the candidate.
-    """
-    if (application.interview_date is not None
-            and application.interview_date >= application.submitted_at):
-        return application.interview_date, "interview"
-    return application.submitted_at, "application"
+    that is — its closing date (`recruitment_list.closed_on`): the interview,
+    or the submission when there was none. A rejected application is always
+    closed, so this never comes back empty."""
+    return closed_on(application)
 
 
 EmbargoKey = Tuple[str, str]  # (staff number, job number of the current application)
@@ -149,35 +136,20 @@ def find_embargoes(
                 if not was_rejected(prior):
                     continue
                 start, basis = _embargo_start(prior)
-                if start > current.submitted_at:
-                    # Rejected after this one was submitted: counts only as
-                    # the other half of a double application still open then.
-                    if not _open_at_rejection(current, start, prior):
-                        continue
-                elif start < cutoff:
-                    continue  # the window closed before this submission
+                # The other half of a double application: its rejection counts
+                # against this one whichever came first.
+                double = overlapped(current, prior)
+                if not double and not cutoff <= start <= current.submitted_at:
+                    continue  # outside the window, or not yet rejected then
                 found = Embargo(
                     staff_number, current, prior,
-                    (current.submitted_at - start).days, basis,
+                    (current.submitted_at - start).days, basis, double,
                 )
                 best = embargoes.get(key)
                 if best is None or _rank(found) < _rank(best):
                     embargoes[key] = found
 
     return embargoes
-
-
-def _open_at_rejection(
-    current: Application, rejected_on: dt.date, rejected: Application
-) -> bool:
-    """True when `current` and `rejected` form a double application that was
-    still live when `rejected` was turned down: neighbouring campaigns, and
-    `current` not already rejected itself before that date."""
-    if not campaigns_adjacent(current, rejected):
-        return False
-    if was_rejected(current) and _embargo_start(current)[0] <= rejected_on:
-        return False
-    return True
 
 
 def _rank(embargo: Embargo) -> Tuple[bool, int]:
@@ -209,7 +181,7 @@ def describe(embargo: Embargo) -> str:
     application, and which role it was for; for a double application, the
     other job and when it was rejected. Either way it ends with
     the decision that made it count — what a reviewer needs to sanity-check
-    the flag, since a rejection on any one of four fields is enough to
+    the flag, since a rejection on any one of five fields is enough to
     trigger it (see `recruitment_list.was_rejected`).
 
     Every value is printed as the List records them — PENDING and HOLD appear
@@ -222,10 +194,15 @@ def describe(embargo: Embargo) -> str:
     role = embargo.prior.role or "unknown role"
     if embargo.is_double:
         job = f" job {embargo.prior.job_number}" if embargo.prior.job_number else ""
-        rejected_at = "at interview" if basis == "interview" else "at application"
+        if basis == "interview":
+            rejected = f" rejected at interview on {start.strftime('%d %b %Y')}"
+        elif embargo.prior.invited_to_interview == "NO":
+            rejected = ""  # the outcome below already says "not taken to interview"
+        else:
+            rejected = " rejected before interview"  # the List has no date for it
         lead = (
-            f"⚠ Double application — {role}{job} ({embargo.prior_campaign}) "
-            f"rejected {rejected_at} on {start.strftime('%d %b %Y')}"
+            f"⚠ Double application — {role}{job} ({embargo.prior_campaign})"
+            f"{rejected}"
         )
     else:
         months = embargo.days_apart / 30.44
@@ -234,9 +211,12 @@ def describe(embargo: Embargo) -> str:
             f"{embargo.prior_campaign} {basis} on "
             f"{start.strftime('%d %b %Y')} ({role})"
         )
+    if embargo.prior.invited_to_interview == "NO":
+        outcome = "not taken to interview"
+    else:
+        outcome = f"interview: {embargo.prior.interview_decision or 'not recorded'}"
     detail = (
-        f"{lead} — "
-        f"interview: {embargo.prior.interview_decision or 'not recorded'}, "
+        f"{lead} — {outcome}, "
         f"approval: {embargo.prior.final_approval or 'not recorded'}"
     )
     if embargo.prior.idp_sim_decision or embargo.prior.final_idp_approval:

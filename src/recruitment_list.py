@@ -59,7 +59,7 @@ import datetime as dt
 import json
 import re
 from pathlib import Path
-from typing import Dict, List, NamedTuple, Optional
+from typing import Dict, List, NamedTuple, Optional, Tuple
 
 from campaign import fy_for_date
 
@@ -156,8 +156,12 @@ class Application(NamedTuple):
     # None if they never were — typically an application form rejected before
     # interview. The planned INTERVIEWDATE is deliberately not used: a
     # scheduled interview that never happened is no interview. The embargo is
-    # measured from this date when present; see `embargo._embargo_start`.
+    # measured from this date when present; see `closed_on`.
     interview_date: Optional[dt.date] = None
+    # The earlier-stage INTERVIEW column: was the candidate taken to
+    # interview at all? NO is an application-stage rejection — the form was
+    # turned down, so there is no interview and no post-interview DECISION.
+    invited_to_interview: str = ""  # YES / NO / PENDING / ''
 
 
 def _decode_sharepoint(name: str) -> str:
@@ -218,6 +222,9 @@ _JOB_NUMBER = "jobnumberapplied"
 # Exact match: the OData export also carries INTERVIEWDATE (the planned date),
 # which normalises to a different key and is intentionally not read.
 _ACTUAL_INTERVIEW_DATE = "actualinterviewdate"
+# Exact match only (see load_report): a prefix search for "interview" would
+# land on INTERVIEWDATE and its siblings.
+_INVITED_TO_INTERVIEW = "interview"
 
 # The friendly export labels this "🔴 INTERVIEW DECISION 🔴"; the OData one
 # calls it plain DECISION. Exact matching resolves DECISION ahead of its
@@ -392,6 +399,7 @@ def load_report(path: Optional[Path] = None):
             (p for p in (locate(c) for c in _INTERVIEW_DECISION)
              if p is not None), None
         )
+        invited_position = index.get(_INVITED_TO_INTERVIEW)
 
         def field(row: List[str], position: Optional[int]) -> str:
             if position is None or position >= len(row):
@@ -424,6 +432,7 @@ def load_report(path: Optional[Path] = None):
                     interview_date=parse_date(
                         field(row, positions[_ACTUAL_INTERVIEW_DATE])
                     ),
+                    invited_to_interview=field(row, invited_position).upper(),
                 )
             )
 
@@ -522,16 +531,18 @@ def application_history(
 
 
 def was_rejected(application: Application) -> bool:
-    """True when this application's outcome, on any of its four decision
-    fields, was a rejection.
+    """True when this application was rejected at any stage: not taken to
+    interview (INTERVIEW = NO), or a rejection on any of its four decision
+    fields.
 
-    The two decision fields (interview_decision, idp_sim_decision) use
-    YES/NO/PENDING/HOLD; the two approval fields (final_approval,
-    final_idp_approval) use APPROVED/REJECTED/PENDING — different
-    enumerations for the same underlying "no" answer.
+    The decision fields (invited_to_interview, interview_decision,
+    idp_sim_decision) use YES/NO/PENDING/HOLD; the two approval fields
+    (final_approval, final_idp_approval) use APPROVED/REJECTED/PENDING —
+    different enumerations for the same underlying "no" answer.
     """
     return (
-        application.interview_decision == "NO"
+        application.invited_to_interview == "NO"
+        or application.interview_decision == "NO"
         or application.idp_sim_decision == "NO"
         or application.final_approval == "REJECTED"
         or application.final_idp_approval == "REJECTED"
@@ -565,29 +576,74 @@ def campaigns_adjacent(a: Application, b: Application) -> bool:
     return abs(years[0] - years[1]) <= 1
 
 
+def closed_on(application: Application) -> Optional[Tuple[dt.date, str]]:
+    """When a closed application closed, and which date that is — or None
+    while it is still open (`is_open`).
+
+    The interview date when the candidate was interviewed ("interview");
+    otherwise — typically a form rejected before interview — the submission
+    date ("application"), since the List records no decision date. That
+    stand-in is only trusted across seasons; see `overlapped` for how an
+    undated decision is placed within one.
+
+    An interview dated before its own application is a data-entry error (the
+    live List has one in 2023 against a 2026 application) and is ignored in
+    favour of the submission date: trusting it would close the embargo window
+    early and clear the candidate.
+    """
+    if is_open(application):
+        return None
+    if (application.interview_date is not None
+            and application.interview_date >= application.submitted_at):
+        return application.interview_date, "interview"
+    return application.submitted_at, "application"
+
+
+def overlapped(a: Application, b: Application) -> bool:
+    """True when two applications were live at the same time: in the same or
+    a neighbouring financial year, and each submitted on or before the other
+    closed (or while the other is still open).
+
+    An application closed with no date on record (not taken to interview,
+    say) is assumed to have closed after every other application that
+    season was made — the decisions come after the round's applications are
+    in — so within one season it always overlaps. Across seasons its
+    `Created` date stands in for the decision.
+    """
+    if not campaigns_adjacent(a, b):
+        return False
+    for first, second in ((a, b), (b, a)):
+        closed = closed_on(first)
+        if closed is None or second.submitted_at <= closed[0]:
+            continue
+        undated = closed[1] == "application"
+        if undated and campaign_of_application(first) == campaign_of_application(second):
+            continue
+        return False
+    return True
+
+
 def double_applications(
     applications: List[Application], campaign: str
 ) -> Dict[tuple, List[Application]]:
-    """Maps (staff number, job number) -> the candidate's *other* open
-    applications, for each open application in `campaign` that has any.
+    """Maps (staff number, job number) -> the candidate's other applications
+    that overlapped it, for each application in `campaign` that has any.
 
-    The point is to stop one person being interviewed twice, so both
-    applications must still be open (`is_open`) and fall in the same or a
-    neighbouring financial year (`campaigns_adjacent`) — which is what
-    catches the rare candidate who applies either side of 1 October. Once
-    either half is rejected, the pair stops being a Double Application and
-    becomes an embargo instead (see `embargo.find_embargoes`).
+    The point is to stop one person being interviewed twice: two
+    applications live at once (`overlapped`), in the same or a neighbouring
+    financial year — which catches the rare candidate who applies either
+    side of 1 October. The flag is history, not just live state: it stays
+    once either half is rejected, approved or put on hold. A rejection on
+    one half also embargoes the other (see `embargo.find_embargoes`).
     """
     found: Dict[tuple, List[Application]] = {}
     for staff_number, history in by_staff_number(applications).items():
         for current in history:
-            if campaign_of_application(current) != campaign or not is_open(current):
+            if campaign_of_application(current) != campaign:
                 continue
             others = [
                 other for other in history
-                if other is not current
-                and is_open(other)
-                and campaigns_adjacent(current, other)
+                if other is not current and overlapped(current, other)
             ]
             if others:
                 found.setdefault((staff_number, current.job_number), []).extend(others)

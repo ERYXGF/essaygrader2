@@ -16,14 +16,14 @@ to the List on staff number AND financial year.
                grading results, are written either way — a failed join
                never drops a row,
                a Double Application column marking an application the
-               candidate has another *open* application alongside, in this or
-               a neighbouring financial year (see
-               main._apply_double_applications), with the other application(s)
-               named in Double Application Detail,
+               candidate had another application live alongside, in this or
+               a neighbouring financial year — kept once either closes (see
+               main._apply_double_applications) — with the other
+               application(s) and their outcome in Double Application Detail,
                an Embargo column (YES/NO/UNKNOWN) flagging an application
-               made within six months of a rejection, or left open when the
-               other half of a double application was rejected (see
-               embargo.py), with the reasoning in Embargo Detail,
+               made within six months of a rejection, or whose double
+               application's other half was rejected (see embargo.py), with
+               the reasoning in Embargo Detail,
                a File Format column flagging submissions that aren't PDFs,
                a Rubric Version column (shaded when the row was graded under an
                older rubric than this run, as happens after a role-scoped
