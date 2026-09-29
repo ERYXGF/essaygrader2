@@ -392,7 +392,7 @@ outright, and `UNKNOWN` says the opposite just as plainly.
 
 The aim is to make sure no one is interviewed twice. `Double Application` is
 `YES` when the candidate has another application that is **still open** (not
-rejected, not approved) in the **same or a neighbouring financial year**. This
+rejected, not approved, and Final Approval not on HOLD) in the **same or a neighbouring financial year**. This
 row's own application must be open too. Because it reads the recruitment List,
 it catches an application made just the other side of 1 October, which is not
 a row of this report. `Double Application Detail` names each other open

@@ -139,7 +139,7 @@ class Application(NamedTuple):
     # YES/NO it looks like — the live export also carries PENDING and HOLD —
     # so nothing here may treat a non-YES as a NO.
     interview_decision: str  # YES / NO / PENDING / HOLD / ''
-    final_approval: str  # APPROVED / REJECTED / PENDING / ''
+    final_approval: str  # APPROVED / REJECTED / PENDING / HOLD / ''
     financial_year: str = ""  # declared campaign, normalised: '2026' -> 'FY26'
     # The IDP (simulator) stage's own decision/approval pair, reported
     # verbatim like the two above. Appended after financial_year, not
@@ -539,11 +539,18 @@ def was_rejected(application: Application) -> bool:
 
 
 def is_open(application: Application) -> bool:
-    """True while an application has no outcome yet: neither rejected on any
-    field nor approved on either approval field. An open application can
-    still lead to an interview, which is what Double Application guards."""
-    return not was_rejected(application) and "APPROVED" not in (
-        application.final_approval, application.final_idp_approval
+    """True while an application has no outcome yet: not rejected on any
+    field, not approved on either approval field, and not put on HOLD at
+    final approval. An open application can still lead to an interview,
+    which is what Double Application guards.
+
+    Final approval HOLD closes an application without rejecting it, so it
+    never triggers an embargo either (see `was_rejected`).
+    """
+    return (
+        not was_rejected(application)
+        and application.final_approval not in ("APPROVED", "HOLD")
+        and application.final_idp_approval != "APPROVED"
     )
 
 

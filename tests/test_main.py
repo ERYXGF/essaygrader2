@@ -518,7 +518,10 @@ class TestDoubleApplicationWiring(unittest.TestCase):
         self.assertEqual(results[0]["double_application"], "NO")
 
     def test_a_rejected_or_approved_other_application_does_not_count(self):
-        for decision, approval in (("NO", "PENDING"), ("YES", "APPROVED"), ("PENDING", "REJECTED")):
+        for decision, approval in (
+            ("NO", "PENDING"), ("YES", "APPROVED"), ("PENDING", "REJECTED"),
+            ("YES", "HOLD"),  # closed, though not a rejection
+        ):
             results = self._apply(
                 [("25/07/2026 09:00", "100", "LTC", "1", "", ""),
                  ("28/07/2026 09:00", "100", "TRI", "2", decision, approval)],

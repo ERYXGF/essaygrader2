@@ -284,6 +284,14 @@ class TestFindEmbargoes(unittest.TestCase):
         ]
         self.assertEqual(_found(apps, "FY27"), {})
 
+    def test_final_approval_on_hold_is_closed_but_not_a_rejection(self):
+        apps = [
+            _app("100", _date("2026-07-28"), "TRI", decision="YES", approval="HOLD"),
+            _app("100", _date("2026-10-01"), "LTC"),
+        ]
+        self.assertEqual(_found(apps, "FY27"), {})
+        self.assertFalse(rl.is_open(apps[0]))
+
     def test_each_of_the_four_decision_fields_can_trigger_alone(self):
         cases = dict(decision="NO"), dict(approval="REJECTED"), \
             dict(idp_decision="NO"), dict(idp_approval="REJECTED")
