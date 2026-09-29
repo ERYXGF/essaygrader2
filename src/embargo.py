@@ -1,14 +1,20 @@
 """The re-application embargo: rejected candidates must wait six months.
 
-A candidate who was **rejected** and applies again within six months of that
-rejection is flagged. The six months run from the rejected application's
-**interview date** (the List's ACTUALINTERVIEWDATE) — or, when there was no
-interview because the application form itself was rejected, from its
-**submission date** (`Created`). The new application is always placed by its
-submission date, and only an application made **on or after** that date
-counts: someone who applied for two jobs at once and was later rejected on
-one did not apply again after a rejection — that is a Double Application,
-not an embargo. Two further rules, both chosen rather than accidental:
+An application is flagged in two situations:
+
+  - **Re-application.** The candidate applies within six months *after* a
+    rejection. The six months run from the rejected application's
+    **interview date** (the List's ACTUALINTERVIEWDATE) — or, when there was
+    no interview because the application form itself was rejected, from its
+    **submission date** (`Created`). The new application is placed by its
+    own submission date.
+  - **Double application.** The candidate had this application open when
+    another of theirs, in the same or a neighbouring financial year, was
+    rejected — even though this one was submitted first. A rejection on one
+    half of a double application counts against the other automatically.
+    "Open" means this application had not itself been rejected by then.
+
+Two further rules, both chosen rather than accidental:
 
   - **Any role counts.** Applying for TRI in one campaign and LTC in the next is
     still a re-application. The embargo attaches to the person, not the post.
@@ -20,22 +26,16 @@ not an embargo. Two further rules, both chosen rather than accidental:
     see `Application`'s field comments). A candidate who was successful, or
     whose prior application is still pending a decision, does not trigger this.
 
-There is **no campaign boundary** on the prior side: an earlier rejected
+There is **no campaign boundary** on a re-application: an earlier rejected
 application counts whether it was in an earlier campaign or the *same* one.
-This deliberately overlaps with the separately-computed Double Application
-column (`report_writer._double_application_numbers`), which flags same-
-campaign repeats regardless of outcome — the two columns answer different
-questions and a candidate can appear in both, or either alone. What still
-governs "earlier" is the submission timestamp itself, not the campaign label
-or the interview date
-— see `recruitment_list.campaign_of_application` for how a campaign is
-resolved (declared FINANCIALYEAR, falling back to the date) where that label
-is still used elsewhere in this module (naming which campaign a trigger came
-from, e.g. in `describe()`).
+The separate Double Application column (`main._apply_double_applications`)
+answers a different question — are two applications *still open* at once —
+so a candidate whose double application ends in a rejection moves from that
+column to this one.
 
-The flag belongs to the application made inside the window — keyed by
-(staff number, job number) — not to every application that person has: the
-rejected job's own row is not "applying again".
+The flag belongs to the application being assessed — keyed by (staff
+number, job number) — not to every application that person has: the
+rejected job's own row is not flagged by its own rejection.
 
 Nothing here blocks or skips anything. The embargo is reported, and a human
 decides.
@@ -49,6 +49,8 @@ from recruitment_list import (
     Application,
     by_staff_number,
     campaign_of_application,
+    campaigns_adjacent,
+    was_rejected,
 )
 
 # The embargo period, measured from the rejected application's interview date,
@@ -62,8 +64,14 @@ class Embargo(NamedTuple):
     staff_number: str
     current: Application  # the application being assessed now
     prior: Application  # the earlier application that triggers the embargo
-    days_apart: int  # from the prior's embargo start to the current submission
+    # From the prior's embargo start to the current submission; negative for
+    # a double application, whose rejection came after this submission.
+    days_apart: int
     measured_from: str = "application"  # "interview" or "application"
+
+    @property
+    def is_double(self) -> bool:
+        return self.days_apart < 0
 
     @property
     def prior_campaign(self) -> str:
@@ -103,23 +111,6 @@ def _embargo_start(application: Application) -> Tuple[dt.date, str]:
     return application.submitted_at, "application"
 
 
-def _was_rejected(application: Application) -> bool:
-    """True when this application's outcome, on any of its four decision
-    fields, was a rejection.
-
-    The two decision fields (interview_decision, idp_sim_decision) use
-    YES/NO/PENDING/HOLD; the two approval fields (final_approval,
-    final_idp_approval) use APPROVED/REJECTED/PENDING — different
-    enumerations for the same underlying "no" answer.
-    """
-    return (
-        application.interview_decision == "NO"
-        or application.idp_sim_decision == "NO"
-        or application.final_approval == "REJECTED"
-        or application.final_idp_approval == "REJECTED"
-    )
-
-
 EmbargoKey = Tuple[str, str]  # (staff number, job number of the current application)
 
 
@@ -130,13 +121,12 @@ def find_embargoes(
 ) -> Dict[EmbargoKey, Embargo]:
     """Maps (staff number, job number) -> embargo, for applications in `campaign`.
 
-    Only candidates with an application in `campaign` are considered. A prior
-    application can trigger an embargo whether it was in an earlier campaign
-    or the same one — see the module docstring — as long as it was rejected
-    (`_was_rejected`) and the current submission falls within the window
-    after its start (`_embargo_start`) — never before it. Where an
-    application has several qualifying priors, the **shortest** gap is
-    reported: it is the clearest statement of how soon they re-applied.
+    Only applications in `campaign` are assessed; the rejected application
+    that triggers one can be in any campaign for a re-application, or the
+    same/neighbouring one for a double application — see the module
+    docstring. Where an application has several triggers, a re-application
+    beats a double application, and the shortest gap wins within each: it is
+    the clearest statement of how soon they re-applied.
 
     Returns an empty dict when nothing is flagged, so a caller can treat a
     missing key as "no embargo" without special-casing.
@@ -156,19 +146,44 @@ def find_embargoes(
             for prior in history:
                 if prior is current:
                     continue  # an application is never its own trigger
-                if not _was_rejected(prior):
+                if not was_rejected(prior):
                     continue
                 start, basis = _embargo_start(prior)
-                if not cutoff <= start <= current.submitted_at:
-                    # Outside the window, or applied before this rejection —
-                    # the latter is a Double Application, not an embargo.
-                    continue
-                gap = (current.submitted_at - start).days
+                if start > current.submitted_at:
+                    # Rejected after this one was submitted: counts only as
+                    # the other half of a double application still open then.
+                    if not _open_at_rejection(current, start, prior):
+                        continue
+                elif start < cutoff:
+                    continue  # the window closed before this submission
+                found = Embargo(
+                    staff_number, current, prior,
+                    (current.submitted_at - start).days, basis,
+                )
                 best = embargoes.get(key)
-                if best is None or gap < best.days_apart:
-                    embargoes[key] = Embargo(staff_number, current, prior, gap, basis)
+                if best is None or _rank(found) < _rank(best):
+                    embargoes[key] = found
 
     return embargoes
+
+
+def _open_at_rejection(
+    current: Application, rejected_on: dt.date, rejected: Application
+) -> bool:
+    """True when `current` and `rejected` form a double application that was
+    still live when `rejected` was turned down: neighbouring campaigns, and
+    `current` not already rejected itself before that date."""
+    if not campaigns_adjacent(current, rejected):
+        return False
+    if was_rejected(current) and _embargo_start(current)[0] <= rejected_on:
+        return False
+    return True
+
+
+def _rank(embargo: Embargo) -> Tuple[bool, int]:
+    """Sort key for competing triggers: re-applications first, then the
+    shortest gap."""
+    return embargo.is_double, abs(embargo.days_apart)
 
 
 def embargo_for(
@@ -183,18 +198,19 @@ def embargo_for(
     if job_number:
         return embargoes.get((staff_number, job_number))
     found = [e for (staff, _), e in embargoes.items() if staff == staff_number]
-    return min(found, key=lambda e: e.days_apart) if found else None
+    return min(found, key=_rank) if found else None
 
 
 def describe(embargo: Embargo) -> str:
     """The report detail text for one embargo.
 
-    Names the prior campaign, how long ago it was, whether that is measured
-    from its interview or (with no interview) its application, which role it
-    was for, and
+    For a re-application, names the prior campaign, how long ago it was,
+    whether that is measured from its interview or (with no interview) its
+    application, and which role it was for; for a double application, the
+    other job and when it was rejected. Either way it ends with
     the decision that made it count — what a reviewer needs to sanity-check
     the flag, since a rejection on any one of four fields is enough to
-    trigger it (see `_was_rejected`).
+    trigger it (see `recruitment_list.was_rejected`).
 
     Every value is printed as the List records them — PENDING and HOLD appear
     as themselves, and an empty field is called out as unrecorded rather than
@@ -204,11 +220,22 @@ def describe(embargo: Embargo) -> str:
     """
     start, basis = _embargo_start(embargo.prior)
     role = embargo.prior.role or "unknown role"
-    months = embargo.days_apart / 30.44
+    if embargo.is_double:
+        job = f" job {embargo.prior.job_number}" if embargo.prior.job_number else ""
+        rejected_at = "at interview" if basis == "interview" else "at application"
+        lead = (
+            f"⚠ Double application — {role}{job} ({embargo.prior_campaign}) "
+            f"rejected {rejected_at} on {start.strftime('%d %b %Y')}"
+        )
+    else:
+        months = embargo.days_apart / 30.44
+        lead = (
+            f"⚠ Re-applied {embargo.days_apart}d ({months:.1f} months) after "
+            f"{embargo.prior_campaign} {basis} on "
+            f"{start.strftime('%d %b %Y')} ({role})"
+        )
     detail = (
-        f"⚠ Re-applied {embargo.days_apart}d ({months:.1f} months) after "
-        f"{embargo.prior_campaign} {basis} on "
-        f"{start.strftime('%d %b %Y')} ({role}) — "
+        f"{lead} — "
         f"interview: {embargo.prior.interview_decision or 'not recorded'}, "
         f"approval: {embargo.prior.final_approval or 'not recorded'}"
     )

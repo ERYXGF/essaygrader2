@@ -166,6 +166,25 @@ class TestReportOnly(unittest.TestCase):
         output = self._run(essays, cache_data=cache, fy="FY26")
         self.assertIn("--fy", output)
 
+    def test_job_numbers_are_resolved_before_the_per_job_flags(self):
+        """Regression: the embargo ran before _apply_job_numbers, so a row
+        whose job number came from the List lookup had none yet and fell back
+        to the whole person — flagging the rejected job's own row."""
+        cache, essays = self._seeded()
+        order = mock.Mock()
+        order._apply_job_numbers.return_value = set()
+        with mock.patch.object(main, "_apply_job_numbers", order._apply_job_numbers), \
+             mock.patch.object(main, "_apply_embargoes", order._apply_embargoes), \
+             mock.patch.object(
+                 main, "_apply_double_applications", order._apply_double_applications
+             ):
+            self._run(essays, cache_data=cache, fy="FY26")
+        called = [c[0] for c in order.mock_calls if not c[0].startswith("_apply_job_numbers.")]
+        self.assertEqual(
+            called[:3],
+            ["_apply_job_numbers", "_apply_embargoes", "_apply_double_applications"],
+        )
+
     def test_ungraded_essays_are_reported_as_left_out(self):
         """A new PDF cannot appear in a report built from the cache."""
         cache, essays = self._seeded()
@@ -443,6 +462,93 @@ class TestEmbargoWiring(unittest.TestCase):
                 results, "FY27", main._load_applications(path)
             )
         self.assertEqual(len(results), 2)
+
+
+class TestDoubleApplicationWiring(unittest.TestCase):
+    """Two *open* applications, in this or a neighbouring season, could
+    mean two interviews for one person."""
+
+    def _list(self, rows):
+        """rows are (created, staff, role, job, decision, approval)."""
+        handle = tempfile.NamedTemporaryFile(
+            "w", suffix=".csv", delete=False, encoding="utf-8-sig", newline=""
+        )
+        handle.write(
+            "Created,Staff Number,Position applied for,DECISION,FINALAPPROVAL,"
+            "JOB NUMBER APPLIED FOR\n"
+        )
+        for created, staff, role, job, decision, approval in rows:
+            handle.write(f"{created},{staff},{role},{decision},{approval},{job}\n")
+        handle.close()
+        return main._load_applications(handle.name)
+
+    def _apply(self, rows, results, campaign="FY26"):
+        with redirect_stdout(io.StringIO()):
+            main._apply_double_applications(results, campaign, self._list(rows))
+        return results
+
+    def test_two_open_applications_flag_each_other(self):
+        results = self._apply(
+            [("25/07/2026 09:00", "7872", "LTC", "17074", "PENDING", "PENDING"),
+             ("28/07/2026 09:00", "7872", "TRI", "17092", "YES", "PENDING")],
+            [{"candidate_number": "7872", "job_number": "17074"},
+             {"candidate_number": "7872", "job_number": "17092"}],
+        )
+        self.assertEqual([r["double_application"] for r in results], ["YES", "YES"])
+        self.assertIn("TRI job 17092", results[0]["double_application_detail"])
+        self.assertIn("interview: YES", results[0]["double_application_detail"])
+
+    def test_either_side_of_the_season_turnover_is_caught(self):
+        """The case the List is needed for: the other application is in the
+        next season, so it is not a row of this report at all."""
+        results = self._apply(
+            [("25/09/2026 09:00", "100", "LTC", "1", "", ""),
+             ("03/10/2026 09:00", "100", "TRI", "2", "", "")],
+            [{"candidate_number": "100", "job_number": "1"}],
+        )
+        self.assertEqual(results[0]["double_application"], "YES")
+        self.assertIn("FY27", results[0]["double_application_detail"])
+
+    def test_two_seasons_apart_is_not_a_double_application(self):
+        results = self._apply(
+            [("25/09/2026 09:00", "100", "LTC", "1", "", ""),
+             ("03/10/2027 09:00", "100", "TRI", "2", "", "")],
+            [{"candidate_number": "100", "job_number": "1"}],
+        )
+        self.assertEqual(results[0]["double_application"], "NO")
+
+    def test_a_rejected_or_approved_other_application_does_not_count(self):
+        for decision, approval in (("NO", "PENDING"), ("YES", "APPROVED"), ("PENDING", "REJECTED")):
+            results = self._apply(
+                [("25/07/2026 09:00", "100", "LTC", "1", "", ""),
+                 ("28/07/2026 09:00", "100", "TRI", "2", decision, approval)],
+                [{"candidate_number": "100", "job_number": "1"}],
+            )
+            self.assertEqual(results[0]["double_application"], "NO", (decision, approval))
+
+    def test_the_row_s_own_application_rejected_is_not_flagged(self):
+        results = self._apply(
+            [("25/07/2026 09:00", "100", "LTC", "1", "NO", "REJECTED"),
+             ("28/07/2026 09:00", "100", "TRI", "2", "", "")],
+            [{"candidate_number": "100", "job_number": "1"}],
+        )
+        self.assertEqual(results[0]["double_application"], "NO")
+
+    def test_a_row_without_a_job_number_falls_back_to_the_person(self):
+        results = self._apply(
+            [("25/07/2026 09:00", "100", "LTC", "1", "", ""),
+             ("28/07/2026 09:00", "100", "TRI", "2", "", "")],
+            [{"candidate_number": "100", "job_number": ""}],
+        )
+        self.assertEqual(results[0]["double_application"], "YES")
+
+    def test_rows_the_list_cannot_judge_are_left_for_the_report_to_count(self):
+        results = [{"candidate_number": "999", "job_number": "1"}]
+        self._apply([("25/07/2026 09:00", "100", "LTC", "1", "", "")], results)
+        self.assertNotIn("double_application", results[0])
+        with redirect_stdout(io.StringIO()):
+            main._apply_double_applications(results, "FY26", None)
+        self.assertNotIn("double_application", results[0])
 
 
 class TestJobNumberWiring(unittest.TestCase):

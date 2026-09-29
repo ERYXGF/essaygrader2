@@ -26,8 +26,8 @@ version with anonymisation, see `../essaygrader/`.
    `output/ai_essay_grading_report_<campaign>.xlsx` — one file per campaign,
    so running FY26 never overwrites FY27's report
    - **Summary**: one row per candidate — `Financial Year`, `Submitted` (the
-     real submission date), `Double Application`, `Embargo` (YES/NO/UNKNOWN)
-     and `Embargo Detail`, classification colour-coded, the cross-cutting
+     real submission date), `Double Application` and its detail, `Embargo`
+     (YES/NO/UNKNOWN) and `Embargo Detail`, classification colour-coded, the cross-cutting
      scores, `File Format`, `Rubric Version`, and a colour-coded
      `Plagiarism Flag` column (empty when clean)
    - **Detailed**: strengths, weaknesses, rationale, AI risk indicators, and a
@@ -351,17 +351,26 @@ like `Staff_x0020_Number`, ISO 8601 dates, values wrapped in JSON).
 
 ### The re-application embargo
 
-Unsuccessful candidates may not re-apply within **six months**. The pipeline
-flags, in the Summary's `Embargo` column, any candidate whose application falls
-within six months of one in an **earlier campaign**.
+Unsuccessful candidates may not re-apply within **six months** of a
+rejection. The Summary's `Embargo` column flags an application in two cases:
 
-- **Any role counts** — the embargo attaches to the person, not the post.
-- **Every prior applicant counts.** The pipeline has no reliable record of who
-  was actually recruited and does not guess; a successful candidate is not
-  re-applying anyway.
-- Only an *earlier campaign* can trigger it. That is what stops the candidates
-  who apply for two roles days apart in the same campaign flagging each other —
-  that is the `Double Application` column's business.
+- **Re-application.** It was submitted within six months *after* another of
+  the candidate's applications was rejected. The six months run from the
+  rejected application's actual interview date (`ACTUALINTERVIEWDATE`). If
+  there was no interview because the application form itself was rejected,
+  they run from its `Created` date. The planned `INTERVIEWDATE` is not used.
+- **Double application.** It was still open when another of the candidate's
+  applications, in the same or a neighbouring financial year, was rejected.
+  A rejection on one half of a double application counts against the other,
+  even if the other was submitted first.
+
+- **Any role counts:** the embargo attaches to the person, not the post.
+- **Only a rejection counts:** `INTERVIEW DECISION` or `IDP SIM DECISION` =
+  `NO`, or `FINAL APPROVAL` or `FINAL IDP APPROVAL` = `REJECTED`.
+- **Per job:** the flag goes on the application submitted after the rejection
+  (matched by Job Number), not on the rejected job's own row. A row whose Job
+  Number match failed falls back to the staff number, so a failed match never
+  hides an embargo.
 - **Reported, never enforced.** An embargoed candidate is still graded and still
   appears in the report. A human decides.
 
@@ -370,7 +379,8 @@ to filter on, and `Embargo Detail` carries the reasoning for a human.
 
 | `Embargo` | `Embargo Detail` |
 |---|---|
-| `YES` | `⚠ Re-applied 88d (2.9 months) after FY26 application on 16 Jul 2026 (TRI) — interview: PENDING, approval: PENDING` |
+| `YES` | `⚠ Re-applied 1d (0.0 months) after FY26 interview on 24 Jul 2026 (LTC) — interview: NO, approval: REJECTED` |
+| `YES` | `⚠ Double application — TRI job 17092 (FY26) rejected at interview on 01 Sep 2026 — interview: NO, approval: REJECTED` |
 | `NO` | *(blank)* |
 | `UNKNOWN` | `not in recruitment list` |
 | `UNKNOWN` | `recruitment list missing — embargo not checked` |
@@ -378,25 +388,22 @@ to filter on, and `Embargo Detail` carries the reasoning for a human.
 No cell ever has to be read as "checked and clear" by being empty — `NO` says so
 outright, and `UNKNOWN` says the opposite just as plainly.
 
-### The prior outcome is shown, never acted on
+### Double Application
 
-The detail line ends with the previous application's `INTERVIEW DECISION` and
-`FINAL APPROVAL`, so a reviewer can dismiss a rejected candidate's
-re-application in seconds.
+The aim is to make sure no one is interviewed twice. `Double Application` is
+`YES` when the candidate has another application that is **still open** (not
+rejected, not approved) in the **same or a neighbouring financial year**. This
+row's own application must be open too. Because it reads the recruitment List,
+it catches an application made just the other side of 1 October, which is not
+a row of this report. `Double Application Detail` names each other open
+application, with its interview decision.
 
-The embargo does **not** depend on those values, and deliberately so. In the
-current export **124 of 148 candidates have no recorded outcome** — `PENDING` or
-blank on both fields. A rule that only fired on `NO`/`REJECTED` would clear
-those 124 on re-application, not because they succeeded but because a field was
-never filled in. Flagging every prior applicant errs toward a reviewer glancing
-at a row they can dismiss, rather than toward a breach nobody sees.
+Once either application is rejected, the pair is no longer a Double
+Application. It becomes an Embargo instead (see above).
 
-(For the record, should that ever change: in this data `FINAL APPROVAL =
-REJECTED` is a strict subset of `INTERVIEW DECISION = NO` — 15 of 18 — so "either"
-is just the decision field, and "both" is just the approval field.)
-
-Note that in a campaign's **first** year the column is blank for everyone, which
-is correct: there is no earlier campaign to measure six months against.
+A candidate the List cannot judge (no List, or not in it) falls back to
+counting this report's own rows, with the detail `on more than one row of this
+report`.
 
 ---
 

@@ -521,6 +521,72 @@ def application_history(
     return rows
 
 
+def was_rejected(application: Application) -> bool:
+    """True when this application's outcome, on any of its four decision
+    fields, was a rejection.
+
+    The two decision fields (interview_decision, idp_sim_decision) use
+    YES/NO/PENDING/HOLD; the two approval fields (final_approval,
+    final_idp_approval) use APPROVED/REJECTED/PENDING — different
+    enumerations for the same underlying "no" answer.
+    """
+    return (
+        application.interview_decision == "NO"
+        or application.idp_sim_decision == "NO"
+        or application.final_approval == "REJECTED"
+        or application.final_idp_approval == "REJECTED"
+    )
+
+
+def is_open(application: Application) -> bool:
+    """True while an application has no outcome yet: neither rejected on any
+    field nor approved on either approval field. An open application can
+    still lead to an interview, which is what Double Application guards."""
+    return not was_rejected(application) and "APPROVED" not in (
+        application.final_approval, application.final_idp_approval
+    )
+
+
+def campaigns_adjacent(a: Application, b: Application) -> bool:
+    """True when two applications fall in the same or neighbouring financial
+    years — close enough to be live at once, including either side of the
+    1 October turnover. An unreadable campaign label never matches."""
+    try:
+        years = [int(campaign_of_application(x)[2:]) for x in (a, b)]
+    except ValueError:
+        return False
+    return abs(years[0] - years[1]) <= 1
+
+
+def double_applications(
+    applications: List[Application], campaign: str
+) -> Dict[tuple, List[Application]]:
+    """Maps (staff number, job number) -> the candidate's *other* open
+    applications, for each open application in `campaign` that has any.
+
+    The point is to stop one person being interviewed twice, so both
+    applications must still be open (`is_open`) and fall in the same or a
+    neighbouring financial year (`campaigns_adjacent`) — which is what
+    catches the rare candidate who applies either side of 1 October. Once
+    either half is rejected, the pair stops being a Double Application and
+    becomes an embargo instead (see `embargo.find_embargoes`).
+    """
+    found: Dict[tuple, List[Application]] = {}
+    for staff_number, history in by_staff_number(applications).items():
+        for current in history:
+            if campaign_of_application(current) != campaign or not is_open(current):
+                continue
+            others = [
+                other for other in history
+                if other is not current
+                and is_open(other)
+                and campaigns_adjacent(current, other)
+            ]
+            if others:
+                found.setdefault((staff_number, current.job_number), []).extend(others)
+    return found
+
+
 def by_staff_number(applications: List[Application]) -> Dict[str, List[Application]]:
     """Groups applications by candidate, preserving the oldest-first order."""
     grouped: Dict[str, List[Application]] = {}

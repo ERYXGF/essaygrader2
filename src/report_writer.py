@@ -15,11 +15,15 @@ to the List on staff number AND financial year.
                when the row didn't resolve, but the row itself, and its
                grading results, are written either way — a failed join
                never drops a row,
-               a Double Application column marking candidates who applied for
-               more than one role,
-               an Embargo column (YES/NO/UNKNOWN) flagging candidates who
-               re-applied within six months of an earlier campaign's
-               application, with the reasoning in Embargo Detail,
+               a Double Application column marking an application the
+               candidate has another *open* application alongside, in this or
+               a neighbouring financial year (see
+               main._apply_double_applications), with the other application(s)
+               named in Double Application Detail,
+               an Embargo column (YES/NO/UNKNOWN) flagging an application
+               made within six months of a rejection, or left open when the
+               other half of a double application was rejected (see
+               embargo.py), with the reasoning in Embargo Detail,
                a File Format column flagging submissions that aren't PDFs,
                a Rubric Version column (shaded when the row was graded under an
                older rubric than this run, as happens after a role-scoped
@@ -138,6 +142,7 @@ def write_report(
         "Financial Year",
         "Submitted",
         "Double Application",
+        "Double Application Detail",
         "Embargo",
         "Embargo Detail",
         "Classification",
@@ -170,7 +175,7 @@ def write_report(
             r.get("match_status", ""),
             year_of(r.get("campaign", "")),
             r.get("submitted", ""),
-            "YES" if r.get("candidate_number") in double_applicants else "NO",
+            *_double_application(r, double_applicants),
             r.get("embargo", ""),
             r.get("embargo_detail", ""),
             r.get("classification", "Unknown"),
@@ -228,11 +233,20 @@ def write_report(
         elif embargo_cell.value == "UNKNOWN":
             embargo_cell.fill = yellow  # not cleared, not condemned
 
-        # The reasoning behind the verdict: long text, so it wraps.
-        detail_cell = ws1.cell(
-            row=row_idx, column=summary_headers.index("Embargo Detail") + 1
+        # Double Application: two open applications could mean two
+        # interviews for one person — the thing this column exists to stop.
+        double_cell = ws1.cell(
+            row=row_idx, column=summary_headers.index("Double Application") + 1
         )
-        detail_cell.alignment = Alignment(vertical="center", wrap_text=True)
+        if double_cell.value == "YES":
+            double_cell.fill = red
+
+        # The reasoning behind each verdict: long text, so it wraps.
+        for detail_header in ("Embargo Detail", "Double Application Detail"):
+            detail_cell = ws1.cell(
+                row=row_idx, column=summary_headers.index(detail_header) + 1
+            )
+            detail_cell.alignment = Alignment(vertical="center", wrap_text=True)
 
         # Plagiarism flag: wrap (can hold one line per matched pair) and
         # colour-band by risk so flagged rows stand out at a glance.
@@ -344,6 +358,20 @@ def write_report(
     # SAVE
     # =========================
     wb.save(output_file)
+
+
+def _double_application(result: Dict, repeated: set) -> tuple:
+    """(verdict, detail) for the Double Application pair of columns.
+
+    main._apply_double_applications judges it from the recruitment List. A
+    row it could not judge — no List, or a candidate missing from it — falls
+    back to this report's own rows, so the column is never blank.
+    """
+    if "double_application" in result:
+        return result["double_application"], result.get("double_application_detail", "")
+    if result.get("candidate_number") in repeated:
+        return "YES", "on more than one row of this report"
+    return "NO", ""
 
 
 def _double_application_numbers(results: List[Dict]) -> set:

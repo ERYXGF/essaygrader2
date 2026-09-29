@@ -352,16 +352,22 @@ class TestFindEmbargoes(unittest.TestCase):
             _found([_app("100", _date("2026-10-15"))], "FY27"), {}
         )
 
-    def test_a_later_campaign_cannot_trigger_an_embargo(self):
-        """Only history counts. A future application is not a prior one —
-        even a rejected one. The later row here is rejected and the earlier
-        one isn't, so the only way this comes back {} is if the later row
-        is correctly refused as a "prior" for the earlier one."""
+    def test_a_rejection_two_campaigns_later_cannot_trigger_an_embargo(self):
+        """A later rejection counts only as the other half of a double
+        application, which must be in the same or a neighbouring campaign."""
+        apps = [
+            _app("100", _date("2026-08-15")),                 # FY26
+            _app("100", _date("2027-11-20"), decision="NO"),  # FY28, rejected
+        ]
+        self.assertEqual(_found(apps, "FY26"), {})
+
+    def test_a_later_rejection_in_the_same_campaign_is_a_double_application(self):
         apps = [
             _app("100", _date("2026-10-15")),                 # FY27
             _app("100", _date("2026-11-20"), decision="NO"),  # FY27, later, rejected
         ]
-        self.assertEqual(_found(apps, "FY27"), {})
+        found = _found(apps, "FY27")
+        self.assertTrue(found["100"].is_double)
 
     def test_the_campaign_boundary_itself(self):
         """30 Sep is FY26, 1 Oct is FY27 — one day apart, still a
@@ -408,16 +414,55 @@ class TestInterviewDate(unittest.TestCase):
         self.assertEqual(found["100"].days_apart, 79)
         self.assertEqual(found["100"].measured_from, "application")
 
-    def test_two_jobs_at_once_then_one_rejected_is_not_an_embargo(self):
+    def test_a_rejection_on_one_half_of_a_double_application_embargoes_the_other(self):
         """Real case: 860775 applied for LTC on 15 Jul and TRI on 16 Jul; the
-        LTC was rejected at interview on 21 Aug. The TRI was not made *after*
-        a rejection — that is a Double Application, not an embargo."""
+        LTC was rejected at interview on 21 Aug. The TRI was submitted first,
+        but a rejection on one half of a double application counts against
+        the other automatically."""
         apps = [
             _app("860775", _date("2026-07-15"), "LTC", decision="NO",
                  interviewed=_date("2026-08-21"), job_number="17073"),
             _app("860775", _date("2026-07-16"), "TRI", job_number="17091"),
         ]
-        self.assertEqual(eb.find_embargoes(apps, "FY26"), {})
+        found = eb.find_embargoes(apps, "FY26")
+        self.assertEqual(list(found), [("860775", "17091")])
+        embargo = found[("860775", "17091")]
+        self.assertTrue(embargo.is_double)
+        text = eb.describe(embargo)
+        self.assertTrue(text.startswith(
+            "⚠ Double application — LTC job 17073 (FY26) rejected at "
+            "interview on 21 Aug 2026"
+        ), text)
+
+    def test_either_side_of_the_season_turnover_still_counts(self):
+        apps = [
+            _app("100", _date("2026-10-03"), "LTC", decision="NO",
+                 interviewed=_date("2026-11-10"), job_number="2"),   # FY27
+            _app("100", _date("2026-09-25"), "TRI", job_number="1"),  # FY26
+        ]
+        self.assertIn(("100", "1"), eb.find_embargoes(apps, "FY26"))
+
+    def test_an_application_already_rejected_is_not_embargoed_by_a_later_one(self):
+        """Real case: 860775's job 1 was rejected (4 Jun) before job 17073
+        was even submitted — it was never open alongside it."""
+        apps = [
+            _app("860775", _date("2026-06-04"), "LTC", decision="NO",
+                 job_number="1"),
+            _app("860775", _date("2026-07-15"), "LTC", decision="NO",
+                 interviewed=_date("2026-08-21"), job_number="17073"),
+        ]
+        self.assertNotIn(("860775", "1"), eb.find_embargoes(apps, "FY26"))
+
+    def test_a_re_application_beats_a_double_application(self):
+        apps = [
+            _app("100", _date("2026-03-01"), decision="NO", job_number="1"),
+            _app("100", _date("2026-07-01"), job_number="2"),
+            _app("100", _date("2026-07-02"), decision="NO",
+                 interviewed=_date("2026-08-01"), job_number="3"),
+        ]
+        embargo = eb.find_embargoes(apps, "FY26")[("100", "2")]
+        self.assertFalse(embargo.is_double)
+        self.assertEqual(embargo.days_apart, 122)
 
     def test_the_flag_is_on_the_job_applied_for_after_the_rejection(self):
         """Real case: 850263's LTC (job 1) was rejected at interview on

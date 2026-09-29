@@ -450,6 +450,28 @@ class TestSummarySheet(unittest.TestCase):
         self.assertNotEqual(fills["Embargo"][0].start_color.rgb, "00FFC7CE")
         self.assertNotEqual(fills["Embargo"][0].start_color.rgb, "00FFEB9C")
 
+    def test_double_application_comes_from_the_list_when_judged(self):
+        judged = _result("1", "TRI", [])
+        judged["double_application"] = "YES"
+        judged["double_application_detail"] = "Also open: LTC job 2 (FY27, ...)"
+        headers, rows, fills = self._summary([judged])
+        self.assertEqual(rows[0][headers.index("Double Application")], "YES")
+        self.assertEqual(
+            rows[0][headers.index("Double Application Detail")],
+            "Also open: LTC job 2 (FY27, ...)",
+        )
+        self.assertEqual(fills["Double Application"][0].start_color.rgb, "00FFC7CE")
+
+    def test_double_application_falls_back_to_this_report_s_rows(self):
+        headers, rows, _ = self._summary(
+            [_result("1", "TRI", []), _result("1", "LTC", [])]
+        )
+        self.assertEqual(rows[0][headers.index("Double Application")], "YES")
+        self.assertEqual(
+            rows[0][headers.index("Double Application Detail")],
+            "on more than one row of this report",
+        )
+
     def test_classification_band_still_lands_on_the_right_cell(self):
         """Regression: the colour band used to assume Classification was 3rd.
 

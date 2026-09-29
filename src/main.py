@@ -48,6 +48,7 @@ from recruitment_list import (
     submitted_dates,
     submitted_for,
     campaign_of_application,
+    double_applications,
     application_history,
     find_export,
     rows_for,
@@ -491,6 +492,53 @@ def _apply_embargoes(results: list, campaign: str, applications: Optional[list])
         )
 
 
+def _apply_double_applications(
+    results: list, campaign: str, applications: Optional[list]
+) -> None:
+    """Annotates each result with Double Application YES/NO and a detail
+    naming the other open application(s), in place.
+
+    Judged from the List (`recruitment_list.double_applications`): another
+    application by the same person, still open, in this or a neighbouring
+    financial year. Looked up per job number, falling back to the person
+    when the row's Job Number join failed. Where the List can't answer — no
+    List at all, or the candidate isn't in it — the row is left unannotated
+    and report_writer falls back to counting the report's own rows, so the
+    column is never left unjudged.
+    """
+    if applications is None:
+        return
+
+    doubles = double_applications(applications, campaign)
+    listed = {a.staff_number for a in applications}
+
+    flagged = 0
+    for result in results:
+        number = str(result.get("candidate_number", ""))
+        if number not in listed:
+            continue
+        job_number = str(result.get("job_number") or "")
+        if job_number:
+            others = doubles.get((number, job_number), [])
+        else:
+            others = [o for (staff, _), os_ in doubles.items() if staff == number for o in os_]
+        # Dedupe while keeping order: the fallback can see one application
+        # from several of this person's rows.
+        others = list({id(o): o for o in others}.values())
+        result["double_application"] = "YES" if others else "NO"
+        result["double_application_detail"] = "; ".join(
+            f"Also open: {o.role or 'unknown role'}"
+            + (f" job {o.job_number}" if o.job_number else "")
+            + f" ({campaign_of_application(o)}, submitted "
+            f"{o.submitted_at.strftime('%d %b %Y')}, "
+            f"interview: {o.interview_decision or 'not recorded'})"
+            for o in others
+        )
+        flagged += bool(others)
+
+    print(f"   ✓ Double application check: {flagged} flagged")
+
+
 # Match Status values for the Job Number join. MATCHED is the only success;
 # every other value names exactly why the join failed, so a reviewer never
 # has to guess what an unresolved row means. A result is never dropped from
@@ -814,9 +862,12 @@ def run_pipeline(
     # human decides what the flag is worth. Reuses the applications loaded at
     # the top of the run.
     print("📋 Checking the re-application embargo...")
-    _apply_embargoes(results, campaign, applications)
-    _apply_submission_dates(results, applications)
+    # Job numbers first: the embargo and double-application flags are keyed
+    # per job, so a row must know its job before either is judged.
     referenced_ids = _apply_job_numbers(results, campaign, applications)
+    _apply_embargoes(results, campaign, applications)
+    _apply_double_applications(results, campaign, applications)
+    _apply_submission_dates(results, applications)
 
     # List rows no essay file's Job Number resolution ever considered — e.g.
     # one entered manually with no written assignment ever submitted for it.
