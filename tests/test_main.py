@@ -400,6 +400,27 @@ class TestEmbargoWiring(unittest.TestCase):
         self.assertEqual(results[1]["embargo"], main.EMBARGO_NO)
         self.assertEqual(results[1]["embargo_detail"], "")
 
+    def test_only_the_job_applied_for_after_the_rejection_is_flagged(self):
+        path = tempfile.NamedTemporaryFile(
+            "w", suffix=".csv", delete=False, encoding="utf-8-sig", newline=""
+        )
+        path.write(
+            "Created,Staff Number,Position applied for,DECISION,"
+            "JOB NUMBER APPLIED FOR,ACTUALINTERVIEWDATE\n"
+            "04/06/2026 09:00,850263,LTC,NO,1,24/07/2026\n"
+            "25/07/2026 09:00,850263,LTC,,17073,\n"
+        )
+        path.close()
+        results = [
+            {"candidate_number": "850263", "Role": "LTC", "job_number": "1"},
+            {"candidate_number": "850263", "Role": "LTC", "job_number": "17073"},
+        ]
+        with redirect_stdout(io.StringIO()):
+            main._apply_embargoes(results, "FY26", main._load_applications(path.name))
+        self.assertEqual(results[0]["embargo"], main.EMBARGO_NO)
+        self.assertEqual(results[1]["embargo"], main.EMBARGO_YES)
+        self.assertIn("interview on 24 Jul 2026", results[1]["embargo_detail"])
+
     def test_a_candidate_absent_from_the_list_is_marked_unknown(self):
         path = self._list([("12/10/2026 08:30", "872524", "LTC")])
         results = self._results()

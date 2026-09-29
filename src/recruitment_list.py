@@ -152,6 +152,12 @@ class Application(NamedTuple):
     # reason as the pair above: every existing positional call site stays
     # valid.
     job_number: str = ""
+    # When the candidate was actually interviewed (ACTUALINTERVIEWDATE), or
+    # None if they never were — typically an application form rejected before
+    # interview. The planned INTERVIEWDATE is deliberately not used: a
+    # scheduled interview that never happened is no interview. The embargo is
+    # measured from this date when present; see `embargo._embargo_start`.
+    interview_date: Optional[dt.date] = None
 
 
 def _decode_sharepoint(name: str) -> str:
@@ -209,6 +215,9 @@ _IDP_SIM_DECISION = "idpsimdecision"
 # still finds it, and also matches the friendly export's plain
 # 'JOB NUMBER APPLIED FOR'.
 _JOB_NUMBER = "jobnumberapplied"
+# Exact match: the OData export also carries INTERVIEWDATE (the planned date),
+# which normalises to a different key and is intentionally not read.
+_ACTUAL_INTERVIEW_DATE = "actualinterviewdate"
 
 # The friendly export labels this "🔴 INTERVIEW DECISION 🔴"; the OData one
 # calls it plain DECISION. Exact matching resolves DECISION ahead of its
@@ -367,7 +376,8 @@ def load_report(path: Optional[Path] = None):
 
         positions = {key: locate(key) for key in
                      (_CREATED, _STAFF_NUMBER, _ROLE, _FINANCIAL_YEAR,
-                      _FINAL_APPROVAL, _IDP_SIM_DECISION, _JOB_NUMBER)}
+                      _FINAL_APPROVAL, _IDP_SIM_DECISION, _JOB_NUMBER,
+                      _ACTUAL_INTERVIEW_DATE)}
         positions[_FINAL_IDP_APPROVAL] = (
             locate(_FINAL_IDP_APPROVAL) or locate_containing(_FINAL_IDP_APPROVAL)
         )
@@ -411,6 +421,9 @@ def load_report(path: Optional[Path] = None):
                     idp_sim_decision=field(row, positions[_IDP_SIM_DECISION]).upper(),
                     final_idp_approval=field(row, positions[_FINAL_IDP_APPROVAL]).upper(),
                     job_number=field(row, positions[_JOB_NUMBER]),
+                    interview_date=parse_date(
+                        field(row, positions[_ACTUAL_INTERVIEW_DATE])
+                    ),
                 )
             )
 

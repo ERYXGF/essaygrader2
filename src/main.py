@@ -53,7 +53,7 @@ from recruitment_list import (
     rows_for,
     DEFAULT_LIST_DIR,
 )
-from embargo import find_embargoes, describe as describe_embargo, EMBARGO_MONTHS
+from embargo import find_embargoes, embargo_for, describe as describe_embargo, EMBARGO_MONTHS
 from report_writer import write_report
 
 
@@ -466,9 +466,10 @@ def _apply_embargoes(results: list, campaign: str, applications: Optional[list])
     flagged = unlisted = 0
     for result in results:
         number = str(result.get("candidate_number", ""))
-        if number in embargoes:
+        embargo = embargo_for(embargoes, number, str(result.get("job_number") or ""))
+        if embargo is not None:
             result["embargo"] = EMBARGO_YES
-            result["embargo_detail"] = describe_embargo(embargoes[number])
+            result["embargo_detail"] = describe_embargo(embargo)
             flagged += 1
         elif number in listed:
             result["embargo"] = EMBARGO_NO

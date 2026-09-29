@@ -50,11 +50,11 @@ def _row(created, staff, role="TRI", decision="", approval=""):
 
 def _app(
     staff, date, role="TRI", decision="", approval="", year="",
-    idp_decision="", idp_approval="", job_number="",
+    idp_decision="", idp_approval="", job_number="", interviewed=None,
 ):
     return rl.Application(
         staff, date, role, decision, approval, year,
-        idp_decision, idp_approval, job_number,
+        idp_decision, idp_approval, job_number, interviewed,
     )
 
 
@@ -82,6 +82,16 @@ def _odata_row(created, staff, role="TRI"):
         _choice(role), "2", _choice("NO"), "1",
         _choice("NO"), _choice("PENDING"),
     ])
+
+
+def _found(applications, campaign):
+    """find_embargoes collapsed to one embargo per person (shortest gap), for
+    tests about *whether* someone is flagged rather than on which job."""
+    by_staff = {}
+    for (staff, _), embargo in eb.find_embargoes(applications, campaign).items():
+        if staff not in by_staff or embargo.days_apart < by_staff[staff].days_apart:
+            by_staff[staff] = embargo
+    return by_staff
 
 
 def _date(text):
@@ -243,7 +253,7 @@ class TestFindEmbargoes(unittest.TestCase):
             _app("100", _date("2026-07-28"), "TRI", decision="NO"),  # FY26
             _app("100", _date("2026-10-15"), "LTC"),   # FY27, 79 days later
         ]
-        found = eb.find_embargoes(apps, "FY27")
+        found = _found(apps, "FY27")
         self.assertIn("100", found)
         self.assertEqual(found["100"].days_apart, 79)
         self.assertEqual(found["100"].prior_campaign, "FY26")
@@ -253,7 +263,7 @@ class TestFindEmbargoes(unittest.TestCase):
             _app("100", _date("2026-02-05"), decision="NO"),  # FY26
             _app("100", _date("2026-10-15")),          # FY27, 252 days later
         ]
-        self.assertEqual(eb.find_embargoes(apps, "FY27"), {})
+        self.assertEqual(_found(apps, "FY27"), {})
 
     def test_a_different_role_still_counts(self):
         """The embargo attaches to the person, not the post."""
@@ -261,7 +271,7 @@ class TestFindEmbargoes(unittest.TestCase):
             _app("100", _date("2026-07-28"), "TRI", decision="NO"),
             _app("100", _date("2026-10-01"), "TFO"),
         ]
-        self.assertIn("100", eb.find_embargoes(apps, "FY27"))
+        self.assertIn("100", _found(apps, "FY27"))
 
     def test_a_successful_or_pending_prior_never_triggers(self):
         """Only a rejection counts — this is the real change from the old
@@ -272,7 +282,7 @@ class TestFindEmbargoes(unittest.TestCase):
             _app("100", _date("2026-10-01"), "LTC"),
             _app("200", _date("2026-10-01"), "LTC"),
         ]
-        self.assertEqual(eb.find_embargoes(apps, "FY27"), {})
+        self.assertEqual(_found(apps, "FY27"), {})
 
     def test_each_of_the_four_decision_fields_can_trigger_alone(self):
         cases = dict(decision="NO"), dict(approval="REJECTED"), \
@@ -282,7 +292,7 @@ class TestFindEmbargoes(unittest.TestCase):
                 _app("100", _date("2026-07-28"), "TRI", **kwargs),
                 _app("100", _date("2026-10-01"), "LTC"),
             ]
-            self.assertIn("100", eb.find_embargoes(apps, "FY27"), kwargs)
+            self.assertIn("100", _found(apps, "FY27"), kwargs)
 
     def test_two_roles_in_the_same_campaign_do_not_flag_each_other_when_not_rejected(self):
         """The six real double applicants submit 0-4 days apart. Flagging every
@@ -292,7 +302,7 @@ class TestFindEmbargoes(unittest.TestCase):
             _app("872524", _date("2026-07-25"), "TRI"),
             _app("872524", _date("2026-07-28"), "TFO TRI"),
         ]
-        self.assertEqual(eb.find_embargoes(apps, "FY26"), {})
+        self.assertEqual(_found(apps, "FY26"), {})
 
     def test_two_roles_in_the_same_campaign_do_flag_when_the_first_was_rejected(self):
         """Real case: 860775 has three FY26 rows (4 Jun, 15 Jul, 16 Jul); the
@@ -304,7 +314,7 @@ class TestFindEmbargoes(unittest.TestCase):
             _app("860775", _date("2026-06-04"), "LTC", decision="NO", approval="REJECTED"),
             _app("860775", _date("2026-07-15"), "LTC"),
         ]
-        found = eb.find_embargoes(apps, "FY26")
+        found = _found(apps, "FY26")
         self.assertIn("860775", found)
         self.assertEqual(found["860775"].days_apart, 41)
 
@@ -313,14 +323,14 @@ class TestFindEmbargoes(unittest.TestCase):
             _app("100", _date("2026-04-15"), decision="NO"),
             _app("100", _date("2026-10-15")),  # exactly six months
         ]
-        self.assertIn("100", eb.find_embargoes(apps, "FY27"))
+        self.assertIn("100", _found(apps, "FY27"))
 
     def test_one_day_beyond_the_window_is_clear(self):
         apps = [
             _app("100", _date("2026-04-14"), decision="NO"),
             _app("100", _date("2026-10-15")),
         ]
-        self.assertEqual(eb.find_embargoes(apps, "FY27"), {})
+        self.assertEqual(_found(apps, "FY27"), {})
 
     def test_the_shortest_gap_is_the_one_reported(self):
         apps = [
@@ -328,18 +338,18 @@ class TestFindEmbargoes(unittest.TestCase):
             _app("100", _date("2026-07-28"), decision="NO"),
             _app("100", _date("2026-10-15")),
         ]
-        self.assertEqual(eb.find_embargoes(apps, "FY27")["100"].days_apart, 79)
+        self.assertEqual(_found(apps, "FY27")["100"].days_apart, 79)
 
     def test_candidates_not_in_this_campaign_are_ignored(self):
         apps = [
             _app("100", _date("2026-07-28"), decision="NO"),
             _app("200", _date("2026-02-05"), decision="NO"),
         ]
-        self.assertEqual(eb.find_embargoes(apps, "FY27"), {})
+        self.assertEqual(_found(apps, "FY27"), {})
 
     def test_a_first_time_applicant_is_clear(self):
         self.assertEqual(
-            eb.find_embargoes([_app("100", _date("2026-10-15"))], "FY27"), {}
+            _found([_app("100", _date("2026-10-15"))], "FY27"), {}
         )
 
     def test_a_later_campaign_cannot_trigger_an_embargo(self):
@@ -351,7 +361,7 @@ class TestFindEmbargoes(unittest.TestCase):
             _app("100", _date("2026-10-15")),                 # FY27
             _app("100", _date("2026-11-20"), decision="NO"),  # FY27, later, rejected
         ]
-        self.assertEqual(eb.find_embargoes(apps, "FY27"), {})
+        self.assertEqual(_found(apps, "FY27"), {})
 
     def test_the_campaign_boundary_itself(self):
         """30 Sep is FY26, 1 Oct is FY27 — one day apart, still a
@@ -360,8 +370,120 @@ class TestFindEmbargoes(unittest.TestCase):
             _app("100", _date("2026-09-30"), decision="NO"),
             _app("100", _date("2026-10-01")),
         ]
-        found = eb.find_embargoes(apps, "FY27")
+        found = _found(apps, "FY27")
         self.assertEqual(found["100"].days_apart, 1)
+
+
+class TestInterviewDate(unittest.TestCase):
+    """The six months run from the rejected interview, not the form's
+    submission — falling back to submission only when there was no
+    interview (the application form itself was rejected)."""
+
+    def test_an_old_application_interviewed_recently_is_flagged(self):
+        """Submitted 8 months before, but interviewed 2 months before: by the
+        submission date alone this would be a false clear."""
+        apps = [
+            _app("100", _date("2026-02-01"), decision="NO",
+                 interviewed=_date("2026-08-15")),
+            _app("100", _date("2026-10-15")),
+        ]
+        found = _found(apps, "FY27")
+        self.assertEqual(found["100"].days_apart, 61)
+        self.assertEqual(found["100"].measured_from, "interview")
+
+    def test_an_interview_more_than_six_months_ago_is_clear(self):
+        apps = [
+            _app("100", _date("2026-03-01"), decision="NO",
+                 interviewed=_date("2026-04-14")),
+            _app("100", _date("2026-10-15")),
+        ]
+        self.assertEqual(_found(apps, "FY27"), {})
+
+    def test_no_interview_falls_back_to_the_submission_date(self):
+        apps = [
+            _app("100", _date("2026-07-28"), approval="REJECTED"),
+            _app("100", _date("2026-10-15")),
+        ]
+        found = _found(apps, "FY27")
+        self.assertEqual(found["100"].days_apart, 79)
+        self.assertEqual(found["100"].measured_from, "application")
+
+    def test_two_jobs_at_once_then_one_rejected_is_not_an_embargo(self):
+        """Real case: 860775 applied for LTC on 15 Jul and TRI on 16 Jul; the
+        LTC was rejected at interview on 21 Aug. The TRI was not made *after*
+        a rejection — that is a Double Application, not an embargo."""
+        apps = [
+            _app("860775", _date("2026-07-15"), "LTC", decision="NO",
+                 interviewed=_date("2026-08-21"), job_number="17073"),
+            _app("860775", _date("2026-07-16"), "TRI", job_number="17091"),
+        ]
+        self.assertEqual(eb.find_embargoes(apps, "FY26"), {})
+
+    def test_the_flag_is_on_the_job_applied_for_after_the_rejection(self):
+        """Real case: 850263's LTC (job 1) was rejected at interview on
+        24 Jul; job 17073 followed on 25 Jul. Only 17073 is embargoed — the
+        rejected job's own row is not "applying again"."""
+        apps = [
+            _app("850263", _date("2026-06-04"), "LTC", decision="NO",
+                 approval="REJECTED", interviewed=_date("2026-07-24"),
+                 job_number="1"),
+            _app("850263", _date("2026-07-25"), "LTC", job_number="17073"),
+        ]
+        found = eb.find_embargoes(apps, "FY26")
+        self.assertEqual(list(found), [("850263", "17073")])
+        self.assertEqual(found[("850263", "17073")].days_apart, 1)
+        self.assertIsNone(eb.embargo_for(found, "850263", "1"))
+        self.assertIsNotNone(eb.embargo_for(found, "850263", "17073"))
+
+    def test_a_row_without_a_job_number_falls_back_to_the_person(self):
+        """A failed Job Number join must never read as clear."""
+        apps = [
+            _app("100", _date("2026-07-28"), decision="NO", job_number="1"),
+            _app("100", _date("2026-10-15"), job_number="2"),
+        ]
+        found = eb.find_embargoes(apps, "FY27")
+        self.assertEqual(eb.embargo_for(found, "100", "").days_apart, 79)
+        self.assertIsNone(eb.embargo_for(found, "999", ""))
+
+    def test_an_interview_dated_before_its_application_is_ignored(self):
+        """Real case: a List row has a 2023 interview against a 2026
+        application. Trusting it would close the window and clear them."""
+        apps = [
+            _app("11111", _date("2026-08-15"), decision="NO",
+                 interviewed=_date("2023-06-10")),
+            _app("11111", _date("2026-08-26")),
+        ]
+        found = _found(apps, "FY26")
+        self.assertEqual(found["11111"].days_apart, 11)
+        self.assertEqual(found["11111"].measured_from, "application")
+
+    def test_loader_reads_the_actual_interview_date_day_first(self):
+        headers = HEADERS + ",INTERVIEWDATE,ACTUALINTERVIEWDATE"
+        path = _csv([
+            _row("01/03/2026 10:00", "100", decision="NO")
+            + ",2026-04-10T08:00:00Z,04/05/2026",
+        ], headers)
+        self.assertEqual(
+            rl.load_applications(path)[0].interview_date, _date("2026-05-04")
+        )
+
+    def test_a_planned_interview_that_never_happened_is_ignored(self):
+        headers = HEADERS + ",INTERVIEWDATE,ACTUALINTERVIEWDATE"
+        path = _csv([
+            _row("01/03/2026 10:00", "100", decision="NO")
+            + ",2026-04-10T08:00:00Z,",
+        ], headers)
+        self.assertIsNone(rl.load_applications(path)[0].interview_date)
+
+    def test_describe_names_the_interview(self):
+        found = _found([
+            _app("100", _date("2026-06-01"), "LTC", decision="NO",
+                 interviewed=_date("2026-07-28")),
+            _app("100", _date("2026-10-15"), "TRI"),
+        ], "FY27")
+        text = eb.describe(found["100"])
+        self.assertIn("79d", text)
+        self.assertIn("FY26 interview on 28 Jul 2026", text)
 
 
 class TestFinancialYear(unittest.TestCase):
@@ -403,7 +525,7 @@ class TestFinancialYear(unittest.TestCase):
             rl.Application("100", _date("2026-07-28"), "TRI", "NO", "", "FY26"),
             rl.Application("100", _date("2026-09-20"), "LTC", "", "", "FY27"),
         ]
-        found = eb.find_embargoes(apps, "FY27")
+        found = _found(apps, "FY27")
         self.assertIn("100", found)
         self.assertEqual(found["100"].days_apart, 54)
 
@@ -598,23 +720,23 @@ class TestSubmittedDates(unittest.TestCase):
 
 class TestDescribe(unittest.TestCase):
     def test_names_the_campaign_gap_and_role(self):
-        found = eb.find_embargoes([
+        found = _found([
             _app("100", _date("2026-07-28"), "LTC", decision="NO"),
             _app("100", _date("2026-10-15"), "TRI"),
         ], "FY27")
         text = eb.describe(found["100"])
         self.assertTrue(text.startswith("⚠"))
-        for expected in ("79d", "FY26", "28 Jul 2026", "LTC"):
+        for expected in ("79d", "FY26 application", "28 Jul 2026", "LTC"):
             self.assertIn(expected, text)
 
     def test_idp_fields_are_shown_only_when_recorded(self):
-        found = eb.find_embargoes([
+        found = _found([
             _app("100", _date("2026-07-28"), "LTC", decision="NO"),
             _app("100", _date("2026-10-15"), "TRI"),
         ], "FY27")
         self.assertNotIn("IDP", eb.describe(found["100"]))
 
-        found = eb.find_embargoes([
+        found = _found([
             _app("200", _date("2026-07-28"), "LTC", idp_decision="NO"),
             _app("200", _date("2026-10-15"), "TRI"),
         ], "FY27")
